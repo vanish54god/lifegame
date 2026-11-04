@@ -16,8 +16,8 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - run: pip install -r requirements-dev.txt
@@ -33,7 +33,7 @@ jobs:
           KEY: ${{ secrets.VPS_SSH_KEY }}
         run: |
           if [ -n "$KEY" ]; then echo "ok=true" >> "$GITHUB_OUTPUT"; else echo "ok=false" >> "$GITHUB_OUTPUT"; echo "::notice::Секретов нет — деплой пропущен"; fi
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         if: steps.check.outputs.ok == 'true'
       - name: SSH-ключ
         if: steps.check.outputs.ok == 'true'
