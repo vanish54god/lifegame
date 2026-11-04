@@ -17,10 +17,11 @@ services:
     image: caddy:2
     restart: unless-stopped
     ports:
-      - "80:80"
-      - "443:443"
+      - "80:80"                                   # нужен для получения сертификата
+      - "${HTTPS_PORT:-443}:${HTTPS_PORT:-443}"   # если 443 занят (VPN) — ставь HTTPS_PORT=8443
     environment:
       DOMAIN: ${DOMAIN}
+      HTTPS_PORT: ${HTTPS_PORT:-443}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

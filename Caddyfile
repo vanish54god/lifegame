@@ -1,5 +1,6 @@
-# Caddy сам получит HTTPS-сертификат Let's Encrypt для твоего домена
-{$DOMAIN} {
+# Caddy сам получит HTTPS-сертификат Let's Encrypt (через порт 80).
+# Порт сайта берётся из HTTPS_PORT в .env (по умолчанию 443).
+{$DOMAIN}:{$HTTPS_PORT:443} {
 	encode gzip
 	header Strict-Transport-Security "max-age=31536000"
 	reverse_proxy app:8000
