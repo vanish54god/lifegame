@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0d0f11">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="LifeGame">
+  <title>LifeGame</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icons/icon-192.png">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="grain" aria-hidden="true"></div>
+
+  <!-- Экран входа -->
+  <section id="login" class="login" hidden>
+    <div class="login-box">
+      <div class="logo">LIFE<span>GAME</span></div>
+      <p class="muted">В боте нажми <b>🛠 Админ → 🌐 Веб-приложение</b> и введи код.</p>
+      <form id="login-form" autocomplete="off">
+        <input id="login-code" class="input code-input" maxlength="12" placeholder="КОД" autocapitalize="characters" spellcheck="false">
+        <button class="btn btn-accent wide" type="submit">Войти</button>
+      </form>
+      <p id="login-error" class="error" role="alert"></p>
+    </div>
+  </section>
+
+  <!-- Приложение -->
+  <div id="app" hidden>
+    <header class="hud">
+      <div class="hud-level">
+        <div class="hud-lvl-label">УР.</div>
+        <div id="hud-lvl" class="hud-lvl-num">0</div>
+      </div>
+      <div class="hud-xp">
+        <div class="hud-xp-bar"><div id="hud-xp-fill"></div></div>
+        <div id="hud-xp-text" class="hud-xp-text">0 / 100 XP</div>
+      </div>
+      <div class="hud-right">
+        <div id="hud-streak" class="hud-streak" title="Серия">🔥 0</div>
+        <div id="hud-coins" class="hud-coins">₵0</div>
+      </div>
+    </header>
+
+    <main id="view" class="view"></main>
+
+    <nav class="tabbar" aria-label="Разделы">
+      <button data-tab="today"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg><span>Сегодня</span></button>
+      <button data-tab="admin"><svg viewBox="0 0 24 24"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6a7 7 0 0 0 0 2.4l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.1-.4.1-.8.1-1.2z"/></svg><span>Админ</span></button>
+      <button data-tab="stats"><svg viewBox="0 0 24 24"><path d="M5 20V11M12 20V4M19 20v-6"/></svg><span>Статы</span></button>
+      <button data-tab="shop"><svg viewBox="0 0 24 24"><path d="M5 8h14l-1.5 12h-11zM9 8V6a3 3 0 0 1 6 0v2"/></svg><span>Магазин</span></button>
+      <button data-tab="settings"><svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg><span>Настройки</span></button>
+    </nav>
+  </div>
+
+  <!-- «Задание выполнено» на весь экран -->
+  <div id="splash" class="splash" hidden>
+    <div class="splash-band">
+      <div id="splash-title" class="splash-title">ЗАДАНИЕ ВЫПОЛНЕНО</div>
+      <div id="splash-sub" class="splash-sub">+300 XP</div>
+    </div>
+  </div>
+
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+  <div id="tooltip" class="tooltip" hidden></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

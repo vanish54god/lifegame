@@ -1,0 +1,58 @@
+# Автодеплой: каждый push в main → тесты → заливка на VPS → перезапуск.
+# Секреты (Settings → Secrets and variables → Actions):
+#   VPS_HOST         — IP сервера
+#   VPS_SSH_KEY      — приватный ключ пользователя deploy
+#   VPS_KNOWN_HOSTS  — отпечаток сервера (вывод ssh-keyscan), чтобы не подсунули чужой
+name: deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency: deploy
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements-dev.txt
+      - run: python -m pytest -q
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Есть ли секреты (без них деплой пропускается)
+        id: check
+        env:
+          KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          if [ -n "$KEY" ]; then echo "ok=true" >> "$GITHUB_OUTPUT"; else echo "ok=false" >> "$GITHUB_OUTPUT"; echo "::notice::Секретов нет — деплой пропущен"; fi
+      - uses: actions/checkout@v4
+        if: steps.check.outputs.ok == 'true'
+      - name: SSH-ключ
+        if: steps.check.outputs.ok == 'true'
+        env:
+          KEY: ${{ secrets.VPS_SSH_KEY }}
+          KNOWN: ${{ secrets.VPS_KNOWN_HOSTS }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$KNOWN" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/id_ed25519
+      - name: Заливка файлов (.env и база на сервере не трогаются)
+        if: steps.check.outputs.ok == 'true'
+        run: |
+          rsync -az --delete \
+            --exclude .git/ --exclude .env --exclude data/ --exclude backups/ \
+            ./ deploy@${{ secrets.VPS_HOST }}:/opt/lifegame/
+      - name: Перезапуск
+        if: steps.check.outputs.ok == 'true'
+        run: |
+          ssh deploy@${{ secrets.VPS_HOST }} \
+            "cd /opt/lifegame && docker compose up -d --build && docker image prune -f"

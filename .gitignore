@@ -1,0 +1,9 @@
+.env
+*.db
+*.db-wal
+*.db-shm
+data/
+backups/
+__pycache__/
+.venv/
+.pytest_cache/
