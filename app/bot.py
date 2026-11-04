@@ -194,7 +194,8 @@ def build_router(cfg: Config, game: Game, auth: Auth) -> Router:
         if res["level_after"] > res["level_before"]:
             await target.answer(f"🎉 <b>НОВЫЙ УРОВЕНЬ: {res['level_after']}</b>\n\n" + ui.render_me())
         for a in res["new_achievements"]:
-            await target.answer(f"🏆 <b>Достижение открыто!</b>\n{a['emoji']} {a['title']} — {a['desc']}")
+            head = "🤫 <b>Секретное достижение!</b>" if a.get("secret") else "🏆 <b>Достижение открыто!</b>"
+            await target.answer(f"{head}\n{a['emoji']} <b>{a['title']}</b> — {a['desc']}")
 
     # ================= Постоянная клавиатура (работает из любого состояния) =================
 

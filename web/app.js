@@ -101,7 +101,7 @@ function celebrate(res, quest) {
   if (quest && quest.status === "failed") splash("Задание провалено", "Бывает. Завтра отыграешься.", "fail");
   if (res.level_after > res.level_before) splash("Новый уровень", `Уровень ${res.level_after}`, "level");
   for (const a of res.new_achievements || []) {
-    toast(`🏆 <b>Достижение:</b> ${a.emoji} ${esc(a.title)}`, "ach");
+    toast(`${a.secret ? "🤫 <b>Секретное достижение!</b>" : "🏆 <b>Достижение:</b>"} ${a.emoji} ${esc(a.title)}`, "ach");
   }
 }
 
@@ -511,7 +511,7 @@ async function renderStats() {
     <div id="cats"></div>
 
     <div class="h2">Достижения · ${s.achievements.filter(a => a.done).length}/${s.achievements.length}</div>
-    <div class="ach-grid">${s.achievements.map(a => `<div class="ach ${a.done ? "" : "locked"}">
+    <div class="ach-grid">${s.achievements.map(a => `<div class="ach ${a.done ? "" : "locked"} ${a.secret ? "secret" : ""}">
       <div class="ach-emoji">${a.emoji}</div><div class="ach-title">${esc(a.title)}</div><div class="ach-desc">${esc(a.desc)}</div></div>`).join("")}</div>`;
   view.innerHTML = html;
 

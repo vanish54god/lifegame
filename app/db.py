@@ -52,6 +52,12 @@ CREATE TABLE IF NOT EXISTS settings (
     value TEXT NOT NULL
 );
 
+-- Открытые достижения (навсегда, даже если потом что-то отменил)
+CREATE TABLE IF NOT EXISTS achievements (
+    key         TEXT PRIMARY KEY,
+    unlocked_at TEXT NOT NULL
+);
+
 -- Вход в веб-приложение: одноразовые коды и сессии (храним только хэши)
 CREATE TABLE IF NOT EXISTS login_codes (
     code_hash  TEXT PRIMARY KEY,

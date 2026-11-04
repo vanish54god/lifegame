@@ -74,27 +74,53 @@ STARTER_TEMPLATES = [
 SHOP_KINDS = {"wish": "🎁 Вишлист", "trip": "🗺 Поход", "fun": "🎲 Интерактив"}
 
 
-# Достижения: (ключ, эмодзи, название, описание)
+# Достижения: (ключ, эмодзи, название, описание, секретное?)
+# 🙈 Ваня, секретные условия ниже — не подглядывай!
 ACHIEVEMENTS = [
-    ("first", "🩸", "Первая кровь", "Выполни первый квест"),
-    ("lvl5", "⭐", "Уже не новичок", "Дойди до 5 уровня"),
-    ("lvl10", "🌟", "Свой человек", "Дойди до 10 уровня"),
-    ("lvl25", "👑", "Хозяин района", "Дойди до 25 уровня"),
-    ("streak3", "🔥", "Разогрев", "Серия 3 дня"),
-    ("streak7", "🔥", "Неделя без промахов", "Серия 7 дней"),
-    ("streak30", "☄️", "Машина", "Серия 30 дней"),
-    ("day1000", "💥", "Тысячник", "1000 XP за один день"),
-    ("ultra", "🧨", "Ультра хард", "Выполни квест с XP выше обычного"),
-    ("perfect", "💯", "Идеальный день", "Выполни все квесты дня (минимум 4)"),
-    ("sleep7", "😴", "Режим", "7 раз вовремя лечь"),
-    ("allcats", "🎯", "Многостаночник", "Выполни квесты во всех основных категориях"),
-    ("shopper", "🛍", "Заслужил", "Первая покупка в магазине"),
+    ("first", "🩸", "Первая кровь", "Выполни первый квест", False),
+    ("lvl5", "⭐", "Уже не новичок", "Дойди до 5 уровня", False),
+    ("lvl10", "🌟", "Свой человек", "Дойди до 10 уровня", False),
+    ("lvl25", "👑", "Хозяин района", "Дойди до 25 уровня", False),
+    ("streak3", "🔥", "Разогрев", "Серия 3 дня", False),
+    ("streak7", "🔥", "Неделя без промахов", "Серия 7 дней", False),
+    ("streak30", "☄️", "Машина", "Серия 30 дней", False),
+    ("day1000", "💥", "Тысячник", "1000 XP за один день", False),
+    ("ultra", "🧨", "Ультра хард", "Выполни квест с XP выше обычного", False),
+    ("perfect", "💯", "Идеальный день", "Выполни все квесты дня (минимум 4)", False),
+    ("sleep7", "😴", "Режим", "7 раз вовремя лечь", False),
+    ("allcats", "🎯", "Многостаночник", "Выполни квесты во всех основных категориях", False),
+    ("shopper", "🛍", "Заслужил", "Первая покупка в магазине", False),
+    # --- вторая партия ---
+    ("gutv20", "🎬", "Режиссёр", "20 квестов по ГУТВ", False),
+    ("work10", "🦺", "Железный хелпер", "10 рабочих смен", False),
+    ("study50", "🎓", "Ботаник", "50 квестов по учёбе", False),
+    ("code30", "🧠", "Алгоритмист", "30 квестов по программированию", False),
+    ("sleep30", "🛌", "Сова в завязке", "30 раз вовремя лечь", False),
+    ("blitz", "⚡", "Блиц", "5 квестов за один день", False),
+    ("strike", "🎳", "Страйк", "10 квестов подряд без единого провала", False),
+    ("perfect7", "💎", "Перфекционист", "7 идеальных дней подряд (всё, включая бонусы)", False),
+    ("piggy", "🐷", "Копилка", "Накопи 2000 монет", False),
+    ("spender", "💸", "Транжира", "Потрать в магазине 1000 монет", False),
+    ("architect", "🏗", "Архитектор", "Создай 10 шаблонов", False),
+    ("xp10k", "📈", "Пятизначный", "10 000 XP за всё время", False),
+    # --- секретные ---
+    ("night", "🌃", "Ночная смена", "Выполнил квест между 2 и 5 часами ночи", True),
+    ("early", "🐓", "Ранняя пташка", "Выполнил квест до 7 утра", True),
+    ("lastmin", "⏰", "В последний момент", "Закрыл основной квест после 23:30 в его же день", True),
+    ("jackpot", "🎰", "Джекпот", "Ровно 777 XP за день", True),
+    ("phoenix", "🐦‍🔥", "Феникс", "Вернулся после недели без квестов и закрыл день", True),
+    ("oops", "🤡", "Ой", "Провалил 3 квеста за один день", True),
+    ("undo", "🔁", "Передумал", "Отменил выполнение 10 раз", True),
+    ("zero", "🪙", "До копейки", "Потратил монеты ровно в ноль", True),
+    ("fri13", "🐈‍⬛", "Пятница, 13", "Выполнил квест в пятницу 13-го", True),
+    ("newyear", "🎄", "С Новым годом!", "Выполнил квест 1 января", True),
 ]
 
 
 class Game:
-    def __init__(self, conn: sqlite3.Connection):
+    def __init__(self, conn: sqlite3.Connection, tz=None):
         self.conn = conn
+        self.tz = tz   # время выполнения квестов пишется по этому поясу (Москва)
         if self.get_setting("seeded") is None:
             for cat, title, xp in STARTER_TEMPLATES:
                 self.conn.execute("INSERT INTO templates (category, title, xp) VALUES (?, ?, ?)",
@@ -164,9 +190,12 @@ class Game:
         """Меняет статус квеста. Возвращает (квест, уровень до, уровень после)."""
         if status not in ("todo", "done", "failed"):
             raise GameError("Неизвестный статус")
-        self.get(quest_id)  # проверка, что квест существует
+        old = self.get(quest_id)  # заодно проверка, что квест существует
         before = self.stats().level.level
-        done_at = datetime.now().isoformat(timespec="seconds") if status == "done" else None
+        now = datetime.now(self.tz).replace(tzinfo=None).isoformat(timespec="seconds")
+        done_at = now if status in ("done", "failed") else None
+        if old.status == "done" and status == "todo":
+            self.set_setting("undo_count", str(int(self.get_setting("undo_count", "0")) + 1))
         self.conn.execute("UPDATE quests SET status = ?, done_at = ? WHERE id = ?",
                           (status, done_at, quest_id))
         self.conn.commit()
@@ -408,24 +437,99 @@ class Game:
         }
 
     def achievements(self, today: date, s: dict, st: Stats, best_streak: int) -> list[dict]:
-        done_rows = self.conn.execute(
-            "SELECT category, xp FROM quests WHERE status='done'").fetchall()
-        cats_done = {r["category"] for r in done_rows}
-        sleep_done = sum(1 for r in done_rows if r["category"] == "sleep")
-        ultra = any(r["xp"] > rules.CATEGORIES[r["category"]].xp_max for r in done_rows)
-        perfect = any(x["total"] >= 4 and x["done"] == x["total"] for x in s.values())
-        bought = self.conn.execute("SELECT COUNT(*) FROM purchases").fetchone()[0] > 0
+        rows = self.conn.execute(
+            "SELECT day, category, xp, status, done_at, created_at FROM quests "
+            "WHERE status IN ('done', 'failed') ORDER BY day, COALESCE(done_at, created_at), id").fetchall()
+        done_rows = [r for r in rows if r["status"] == "done"]
+        cnt = {k: 0 for k in rules.CATEGORIES}
+        for r in done_rows:
+            cnt[r["category"]] += 1
+        cats_done = {k for k, v in cnt.items() if v}
         main_cats = {k for k, c in rules.CATEGORIES.items() if c.is_main}
         lvl = st.level.level
+        spent = self.conn.execute("SELECT COALESCE(SUM(cost), 0) FROM purchases").fetchone()[0]
+        bought = self.conn.execute("SELECT COUNT(*) FROM purchases").fetchone()[0] > 0
+        n_templates = self.conn.execute("SELECT COUNT(*) FROM templates").fetchone()[0]
+
+        # 10 подряд без провала
+        run = best_run = 0
+        for r in rows:
+            run = run + 1 if r["status"] == "done" else 0
+            best_run = max(best_run, run)
+
+        # 7 идеальных дней подряд
+        def perfect_day(x):
+            return x and x["main_total"] > 0 and x["done"] == x["total"]
+        p_run = p_best = 0
+        if s:
+            d = date.fromisoformat(min(s))
+            while d <= today:
+                p_run = p_run + 1 if perfect_day(s.get(d.isoformat())) else 0
+                p_best = max(p_best, p_run)
+                d += timedelta(days=1)
+
+        # Время выполнения (часы:минуты по Москве)
+        def hm(r):
+            t = r["done_at"] or ""
+            return t[11:16] if len(t) >= 16 else ""
+
+        # Феникс: засчитанный день после 7+ дней без единого выполненного квеста
+        active = sorted(d for d, x in s.items() if x["done"] > 0)
+        phoenix = any(
+            self._complete(s[b]) and (date.fromisoformat(b) - date.fromisoformat(a)).days >= 8
+            for a, b in zip(active, active[1:]))
+
+        fails_by_day: dict[str, int] = {}
+        for r in rows:
+            if r["status"] == "failed":
+                fails_by_day[r["day"]] = fails_by_day.get(r["day"], 0) + 1
+
         got = {
             "first": bool(done_rows), "lvl5": lvl >= 5, "lvl10": lvl >= 10, "lvl25": lvl >= 25,
             "streak3": best_streak >= 3, "streak7": best_streak >= 7, "streak30": best_streak >= 30,
-            "day1000": any(x["xp"] >= 1000 for x in s.values()), "ultra": ultra,
-            "perfect": perfect, "sleep7": sleep_done >= 7,
+            "day1000": any(x["xp"] >= 1000 for x in s.values()),
+            "ultra": any(r["xp"] > rules.CATEGORIES[r["category"]].xp_max for r in done_rows),
+            "perfect": any(x["total"] >= 4 and x["done"] == x["total"] for x in s.values()),
+            "sleep7": cnt["sleep"] >= 7,
             "allcats": main_cats <= cats_done, "shopper": bought,
+            "gutv20": cnt["gutv"] >= 20, "work10": cnt["work"] >= 10, "study50": cnt["study"] >= 50,
+            "code30": cnt["code"] >= 30, "sleep30": cnt["sleep"] >= 30,
+            "blitz": any(x["done"] >= 5 for x in s.values()),
+            "strike": best_run >= 10, "perfect7": p_best >= 7,
+            "piggy": st.coins >= 2000, "spender": spent >= 1000,
+            "architect": n_templates >= 10, "xp10k": st.total_xp >= 10_000,
+            "night": any("02:00" <= hm(r) < "05:00" for r in done_rows),
+            "early": any("05:00" <= hm(r) < "07:00" for r in done_rows),
+            "lastmin": any(rules.CATEGORIES[r["category"]].is_main and hm(r) >= "23:30"
+                           and (r["done_at"] or "")[:10] == r["day"] for r in done_rows),
+            "jackpot": any(x["xp"] == 777 for x in s.values()),
+            "phoenix": phoenix,
+            "oops": any(v >= 3 for v in fails_by_day.values()),
+            "undo": int(self.get_setting("undo_count", "0")) >= 10,
+            "zero": bought and st.coins == 0,
+            "fri13": any(date.fromisoformat(r["day"]).day == 13 and date.fromisoformat(r["day"]).weekday() == 4
+                         for r in done_rows),
+            "newyear": any(r["day"][5:] == "01-01" for r in done_rows),
         }
-        return [{"key": k, "emoji": e, "title": t, "desc": d, "done": got[k]}
-                for k, e, t, d in ACHIEVEMENTS]
+
+        # Открытое достижение остаётся открытым навсегда
+        unlocked = {r["key"]: r["unlocked_at"] for r in self.conn.execute("SELECT * FROM achievements")}
+        now = datetime.now(self.tz).replace(tzinfo=None).isoformat(timespec="seconds")
+        fresh = [k for k, ok in got.items() if ok and k not in unlocked]
+        for k in fresh:
+            self.conn.execute("INSERT OR IGNORE INTO achievements (key, unlocked_at) VALUES (?, ?)", (k, now))
+            unlocked[k] = now
+        if fresh:
+            self.conn.commit()
+
+        out = []
+        for k, e, t, d, secret in ACHIEVEMENTS:
+            done = k in unlocked
+            if secret and not done:
+                e, t, d = "🔒", "???", "Секретное достижение"
+            out.append({"key": k, "emoji": e, "title": t, "desc": d, "done": done,
+                        "secret": secret, "unlocked_at": unlocked.get(k)})
+        return out
 
     # ================= Настройки =================
 

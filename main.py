@@ -18,7 +18,7 @@ from app.web import create_app
 async def main() -> None:
     cfg = load_config()
     conn = connect(cfg.db_path)
-    game, auth = Game(conn), Auth(conn)
+    game, auth = Game(conn, cfg.tz), Auth(conn)
 
     bot, dp = make_bot(cfg, game, auth)
     await bot.set_my_commands(COMMANDS)
