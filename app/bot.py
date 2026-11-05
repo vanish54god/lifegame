@@ -23,6 +23,7 @@ from .auth import Auth
 from .config import Config
 from .game import SHOP_KINDS, Game, GameError, game_day
 from .promise_text import parse_promise
+from .bot_finance import K_FIN, FinUI, register_finance
 
 # Тексты кнопок постоянной клавиатуры
 K_TODAY, K_ME, K_ADMIN, K_SHOP = "🎮 Сегодня", "👤 Профиль", "🛠 Админ", "🛒 Магазин"
@@ -31,7 +32,7 @@ K_PROM = "💌 Обещания"
 MAIN_KB = ReplyKeyboardMarkup(
     keyboard=[[KeyboardButton(text=K_TODAY), KeyboardButton(text=K_ME)],
               [KeyboardButton(text=K_ADMIN), KeyboardButton(text=K_SHOP)],
-              [KeyboardButton(text=K_PROM)]],
+              [KeyboardButton(text=K_PROM), KeyboardButton(text=K_FIN)]],
     resize_keyboard=True, is_persistent=True,
 )
 
@@ -45,6 +46,10 @@ HELP = """<b>🎮 Как играть</b>
 <code>обещал забрать посылку в пятницу</code>
 Срок бот поймёт сам (сегодня, завтра, в пятницу, на выходных, до 12.11).
 Без срока тоже можно — через пару дней бот спросит «когда?».
+
+<b>💰 Финансы</b> — тоже просто текстом:
+<code>кофе 250</code> · <code>такси 1.5к</code> · <code>+30000 зарплата</code>
+Смены, зарплата, платежи и желания — кнопка «💰 Финансы».
 
 <b>Команды на всякий случай</b>
 /add <i>категория xp название</i> — квест на завтра
@@ -212,9 +217,12 @@ class UI:
         """Ежедневное напоминание. None — если напоминать нечего."""
         t = self.today()
         n = self.game.promises_to_nudge(t)
-        if not any(n.values()):
+        pay_lines, pay_rows = FinUI(self).digest_lines()
+        if not any(n.values()) and not pay_lines:
             return None
-        lines, rows = ["💌 <b>Обещания</b>"], []
+        lines, rows = ["☀️ <b>Сводка на сегодня</b>"], []
+        if any(n.values()):
+            lines.append("\n💌 <b>Обещания</b>")
         sections = [("overdue", "⚠️ Просрочено"), ("today", "📌 Сегодня"), ("tomorrow", "⏭ Завтра")]
         for key, title in sections:
             if n[key]:
@@ -230,6 +238,8 @@ class UI:
                 lines.append(f"• {escape(p['text'])} <i>(уже {p['age']} дн)</i>")
                 rows.append([Btn(text=f"📅 {short(p['text'], 28)}", callback_data=f"p:menu:{p['id']}")])
             self.game.mark_nudged([p["id"] for p in n["hanging"]], t)
+        lines += pay_lines
+        rows += pay_rows
         return "\n".join(lines), kb(*rows)
 
     def render_shop(self) -> tuple[str, InlineKeyboardMarkup | None]:
@@ -267,6 +277,15 @@ def build_router(cfg: Config, game: Game, auth: Auth) -> Router:
     # Всё остальное — только для владельца. Чужие сообщения просто игнорируются.
     router.message.filter(F.from_user.id == cfg.owner_id)
     router.callback_query.filter(F.from_user.id == cfg.owner_id)
+
+    # Любое твоё действие в боте = активность (умный чек-ин не придёт)
+    async def activity(handler, event, data):
+        user = getattr(event, "from_user", None)
+        if user and user.id == cfg.owner_id:
+            game.touch()
+        return await handler(event, data)
+    router.message.outer_middleware(activity)
+    router.callback_query.outer_middleware(activity)
 
     async def edit(cb: CallbackQuery, text: str, markup=None):
         try:
@@ -738,12 +757,21 @@ def build_router(cfg: Config, game: Game, auth: Auth) -> Router:
         await cb.answer("Удалено")
         await edit(cb, f"🗑 <s>{escape(p['text'])}</s>")
 
+    @router.message(Command("finance"))
+    async def cmd_finance(msg: Message, state: FSMContext):
+        await state.clear()
+        text, markup = FinUI(ui).overview()
+        await msg.answer(text, reply_markup=markup)
+
+    register_finance(router, ui, edit, celebrate, MAIN_KB)
+
     # Любой другой текст вне диалогов — подсказка
     @router.message(StateFilter(None), F.text)
     async def unknown_text(msg: Message):
-        await msg.answer("Не понял 🤔 Пользуйся кнопками внизу.\n"
-                         "Чтобы записать обещание, начни со слова «обещал»:\n"
-                         "<code>обещал позвонить в субботу</code>", reply_markup=MAIN_KB)
+        await msg.answer("Не понял 🤔 Пользуйся кнопками внизу.\n\n"
+                         "💌 Обещание: <code>обещал позвонить в субботу</code>\n"
+                         "💸 Трата: <code>кофе 250</code>  ·  💵 доход: <code>+3000 монтаж</code>",
+                         reply_markup=MAIN_KB)
 
     @router.callback_query()
     async def stale(cb: CallbackQuery):
@@ -778,6 +806,11 @@ async def reminders_loop(bot: Bot, cfg: Config, game: Game) -> None:
                     text, markup = ui.admin_menu()
                     text = "🌙 <b>Время админа.</b> Настрой завтрашний день.\n\n" + plan
                 await bot.send_message(cfg.owner_id, text, reply_markup=markup)
+            # умный чек-ин
+            if game.checkin_due(now.hour):
+                game.checkin_sent()
+                text, markup = FinUI(ui).checkin()
+                await bot.send_message(cfg.owner_id, text, reply_markup=markup)
         except Exception as e:  # напоминание не должно ронять бота
             print("Ошибка напоминания:", e)
         await asyncio.sleep(20)
@@ -796,6 +829,7 @@ COMMANDS = [
     BotCommand(command="me", description="Уровень, серия, монеты"),
     BotCommand(command="shop", description="Магазин"),
     BotCommand(command="promises", description="Обещания"),
+    BotCommand(command="finance", description="Финансы"),
     BotCommand(command="web", description="Войти в веб-приложение"),
     BotCommand(command="help", description="Помощь"),
 ]

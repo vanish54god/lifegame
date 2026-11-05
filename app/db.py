@@ -102,5 +102,7 @@ def connect(path: str | Path) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row   # строки можно читать как словарь: row["title"]
     conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript(SCHEMA)
+    from .finance import SCHEMA as FIN_SCHEMA   # таблицы финансов
+    conn.executescript(FIN_SCHEMA)
     _migrate(conn)
     return conn

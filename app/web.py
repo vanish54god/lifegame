@@ -18,6 +18,8 @@ from .auth import Auth
 from .config import Config
 from .game import SHOP_KINDS, Game, GameError, game_day
 from .promise_text import parse_promise
+from .finance import FinError
+from .web_finance import add_finance_routes
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
@@ -65,6 +67,10 @@ class SettingsIn(BaseModel):
     remind_morning: str = ""
     remind_evening: str = ""
     remind_promises: str = "10:00"
+    checkin_on: bool = True
+    checkin_every: int = Field(3, ge=1, le=12)
+    checkin_from: int = Field(10, ge=0, le=23)
+    checkin_to: int = Field(22, ge=1, le=24)
 
 class PromiseIn(BaseModel):
     text: str = Field(max_length=300)
@@ -92,6 +98,10 @@ def create_app(cfg: Config, game: Game, auth: Auth) -> FastAPI:
     async def game_error(_: Request, e: GameError):
         return JSONResponse({"detail": str(e)}, status_code=400)
 
+    @app.exception_handler(FinError)
+    async def fin_error(_: Request, e: FinError):
+        return JSONResponse({"detail": str(e)}, status_code=400)
+
     # Заголовки безопасности для всех ответов
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
@@ -104,6 +114,9 @@ def create_app(cfg: Config, game: Game, auth: Auth) -> FastAPI:
             "script-src 'self'; connect-src 'self'; frame-ancestors 'none'")
         if request.url.path.startswith("/api"):
             resp.headers["Cache-Control"] = "no-store"
+            # изменения через приложение — тоже активность (чек-ин не нужен)
+            if request.method != "GET" and resp.status_code < 400 and request.url.path != "/api/login":
+                game.touch()
         return resp
 
     async def require_auth(request: Request) -> str:
@@ -268,6 +281,10 @@ def create_app(cfg: Config, game: Game, auth: Auth) -> FastAPI:
         return {"remind_morning": game.get_setting("remind_morning", ""),
                 "remind_evening": game.get_setting("remind_evening", ""),
                 "remind_promises": game.get_setting("remind_promises", "10:00"),
+                "checkin_on": game.get_setting("checkin_on", "1") == "1",
+                "checkin_every": int(float(game.get_setting("checkin_every", "3"))),
+                "checkin_from": int(game.get_setting("checkin_from", "10")),
+                "checkin_to": int(game.get_setting("checkin_to", "22")),
                 "sessions": auth.sessions_count(),
                 "day_start_hour": cfg.day_start_hour}
 
@@ -278,7 +295,15 @@ def create_app(cfg: Config, game: Game, auth: Auth) -> FastAPI:
             if val and not TIME_RE.match(val):
                 raise HTTPException(400, "Время в формате ЧЧ:ММ, например 08:30")
             game.set_setting(key, val)
+        if body.checkin_from >= body.checkin_to:
+            raise HTTPException(400, "Чек-ины: «с» должно быть раньше, чем «до»")
+        game.set_setting("checkin_on", "1" if body.checkin_on else "0")
+        game.set_setting("checkin_every", str(body.checkin_every))
+        game.set_setting("checkin_from", str(body.checkin_from))
+        game.set_setting("checkin_to", str(body.checkin_to))
         return await get_settings()
+
+    add_finance_routes(app, game, today, require_auth)
 
     # ================= Само приложение =================
 

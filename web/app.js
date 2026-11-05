@@ -742,7 +742,15 @@ async function renderSettings() {
       <p class="muted small" style="margin-top:0">Необязательно. Оставь поле пустым — напоминания не будет.</p>
       <label class="field"><span>☀️ Утро: «игра началась» + квесты</span><input class="input" type="time" name="morning" value="${esc(st.remind_morning)}"></label>
       <label class="field"><span>🌙 Вечер: «время админа»</span><input class="input" type="time" name="evening" value="${esc(st.remind_evening)}"></label>
-      <label class="field"><span>💌 Обещания: просроченные, на сегодня и «зависшие»</span><input class="input" type="time" name="promises" value="${esc(st.remind_promises)}"></label>
+      <label class="field"><span>☀️ Сводка: обещания и платежи</span><input class="input" type="time" name="promises" value="${esc(st.remind_promises)}"></label>
+      <div class="h3" style="margin-top:6px">👋 Умные чек-ины</div>
+      <p class="muted small" style="margin-top:0">Бот спросит «всё по плану?», только если ты давно ничего не отмечал. Два без ответа подряд — замолкает до твоей активности.</p>
+      <label class="row small" style="margin-bottom:10px"><input type="checkbox" name="ci_on" ${st.checkin_on ? "checked" : ""}> включены</label>
+      <div class="row">
+        <label class="field" style="flex:1"><span>Если тишина, ч</span><select class="input" name="ci_every">${[1, 2, 3, 4, 5, 6].map(n => `<option ${st.checkin_every === n ? "selected" : ""}>${n}</option>`).join("")}</select></label>
+        <label class="field" style="flex:1"><span>С (час)</span><input class="input" name="ci_from" type="number" min="0" max="23" value="${st.checkin_from}"></label>
+        <label class="field" style="flex:1"><span>До (час)</span><input class="input" name="ci_to" type="number" min="1" max="24" value="${st.checkin_to}"></label>
+      </div>
       <button class="btn btn-accent wide" type="submit">Сохранить</button>
     </form>
 
@@ -767,7 +775,11 @@ async function renderSettings() {
 }
 
 actions.saveSettings = async form => {
-  await api("PUT", "/settings", { remind_morning: form.morning.value, remind_evening: form.evening.value, remind_promises: form.promises.value });
+  await api("PUT", "/settings", {
+    remind_morning: form.morning.value, remind_evening: form.evening.value, remind_promises: form.promises.value,
+    checkin_on: form.ci_on.checked, checkin_every: Number(form.ci_every.value),
+    checkin_from: Number(form.ci_from.value), checkin_to: Number(form.ci_to.value),
+  });
   toast("Сохранено");
 };
 actions.logout = async () => {

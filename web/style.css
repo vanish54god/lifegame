@@ -186,7 +186,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); height: 32px; }
 .heat-days { display: grid; grid-template-rows: repeat(7, 1fr); gap: 3px; font-size: 10px; color: var(--muted); }
 .heat-days span { display: flex; align-items: center; }
 
-.hbar { display: grid; grid-template-columns: 110px 1fr 56px; gap: 10px; align-items: center; margin-bottom: 8px; }
+.hbar { display: grid; grid-template-columns: 110px 1fr minmax(56px, auto); gap: 10px; align-items: center; margin-bottom: 8px; }
 .hbar-track { height: 10px; background: var(--surface-2); border-radius: 0 4px 4px 0; }
 .hbar-fill { height: 100%; background: var(--accent); border-radius: 0 4px 4px 0; min-width: 2px; }
 .hbar-val { text-align: right; font: 700 14px var(--cond); font-variant-numeric: tabular-nums; }
@@ -212,7 +212,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); height: 32px; }
 /* ---------- Таб-бар (как телефон) ---------- */
 .tabbar {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 20;
-  display: grid; grid-template-columns: repeat(5, 1fr);
+  display: grid; grid-template-columns: repeat(6, 1fr);
   padding: 6px 6px calc(6px + var(--safe-b));
   background: rgba(13,15,17,.94); border-top: 1px solid var(--line);
   backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
@@ -222,7 +222,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); height: 32px; }
   padding: 6px 0; color: var(--muted); cursor: pointer;
 }
 .tabbar svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-.tabbar span { font-size: 11px; font-weight: 700; }
+.tabbar span { font-size: 10.5px; font-weight: 700; letter-spacing: .02em; }
 .tabbar button.on { color: var(--accent); }
 
 /* ---------- «Задание выполнено» ---------- */
@@ -270,6 +270,7 @@ details.card[open] > summary { margin-bottom: 12px; }
 .list-plain { list-style: none; padding: 0; margin: 0; }
 .list-plain li { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); }
 .list-plain li:last-child { border-bottom: 0; }
+.list-plain.card { padding: 2px 14px; }
 
 @media (min-width: 900px) {
   .view { padding-top: 12px; }

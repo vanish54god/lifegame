@@ -4,11 +4,13 @@
 """
 
 import sqlite3
+import time
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, timedelta
 
 from . import rules
 from .promise_text import due_label
+from .finance import Finance
 
 
 class GameError(Exception):
@@ -108,6 +110,11 @@ ACHIEVEMENTS = [
     ("word10", "🤝", "Человек слова", "Сдержи 10 обещаний", False),
     ("fastword", "⚡", "Быстрее, чем спросят", "5 раз сдержи обещание в течение суток", False),
     ("cleanslate", "🧹", "Чистый лист", "Закрой все обещания (и хотя бы 5 сдержанных)", False),
+    # --- финансы ---
+    ("shift1", "💼", "Первая смена", "Запиши первую смену", False),
+    ("bookkeeper", "🧾", "Бухгалтер", "Запиши 30 трат", False),
+    ("inlimit7", "🛡", "В рамках", "7 дней подряд траты в дневном лимите", False),
+    ("dream", "🌠", "Мечта сбылась", "Исполни желание из карты желаний", False),
     # --- секретные ---
     ("night", "🌃", "Ночная смена", "Выполнил квест между 2 и 5 часами ночи", True),
     ("early", "🐓", "Ранняя пташка", "Выполнил квест до 7 утра", True),
@@ -120,6 +127,7 @@ ACHIEVEMENTS = [
     ("fri13", "🐈‍⬛", "Пятница, 13", "Выполнил квест в пятницу 13-го", True),
     ("newyear", "🎄", "С Новым годом!", "Выполнил квест 1 января", True),
     ("knight", "🌹", "Рыцарь", "Сдержал 50 обещаний", True),
+    ("payday", "💰", "Зарплатный день", "Получил оплату сразу за 5 смен", True),
 ]
 
 
@@ -127,6 +135,11 @@ class Game:
     def __init__(self, conn: sqlite3.Connection, tz=None):
         self.conn = conn
         self.tz = tz   # время выполнения квестов пишется по этому поясу (Москва)
+        self.fin = Finance(conn, self)
+        # для умных чек-инов (в памяти; после перезапуска считаем, что ты только что был активен)
+        self.last_activity = time.time()
+        self.last_checkin = 0.0
+        self.checkin_unanswered = 0
         if self.get_setting("seeded") is None:
             for cat, title, xp in STARTER_TEMPLATES:
                 self.conn.execute("INSERT INTO templates (category, title, xp) VALUES (?, ?, ?)",
@@ -582,6 +595,7 @@ class Game:
         bought = self.conn.execute("SELECT COUNT(*) FROM purchases").fetchone()[0] > 0
         n_templates = self.conn.execute("SELECT COUNT(*) FROM templates").fetchone()[0]
         ps = self.promise_stats(today)
+        fc = self.fin.counts()
 
         # 10 подряд без провала
         run = best_run = 0
@@ -645,6 +659,9 @@ class Game:
             "word10": ps["kept"] >= 10, "fastword": ps["fast"] >= 5,
             "cleanslate": ps["kept"] >= 5 and ps["open"] == 0,
             "knight": ps["kept"] >= 50,
+            "shift1": fc["shifts"] >= 1, "bookkeeper": fc["tx_out"] >= 30,
+            "inlimit7": self.fin.limit_streak(today) >= 7, "dream": fc["wishes_done"] >= 1,
+            "payday": fc["max_payout_shifts"] >= 5,
         }
 
         # Открытое достижение остаётся открытым навсегда
@@ -665,6 +682,24 @@ class Game:
             out.append({"key": k, "emoji": e, "title": t, "desc": d, "done": done,
                         "secret": secret, "unlocked_at": unlocked.get(k)})
         return out
+
+    def touch(self) -> None:
+        """Ты что-то сделал в боте или приложении — чек-ин не нужен."""
+        self.last_activity = time.time()
+        self.checkin_unanswered = 0
+
+    def checkin_due(self, now_hour: int) -> bool:
+        if self.get_setting("checkin_on", "1") != "1":
+            return False
+        every = float(self.get_setting("checkin_every", "3")) * 3600
+        start, end = int(self.get_setting("checkin_from", "10")), int(self.get_setting("checkin_to", "22"))
+        t = time.time()
+        return (start <= now_hour < end and t - self.last_activity >= every
+                and t - self.last_checkin >= every and self.checkin_unanswered < 2)
+
+    def checkin_sent(self) -> None:
+        self.last_checkin = time.time()
+        self.checkin_unanswered += 1
 
     # ================= Настройки =================
 
