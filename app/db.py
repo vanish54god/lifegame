@@ -52,6 +52,19 @@ CREATE TABLE IF NOT EXISTS settings (
     value TEXT NOT NULL
 );
 
+-- Обещания
+CREATE TABLE IF NOT EXISTS promises (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    text        TEXT    NOT NULL,
+    created_day TEXT    NOT NULL,              -- игровой день, когда пообещал
+    due         TEXT,                          -- срок (может не быть)
+    status      TEXT    NOT NULL DEFAULT 'open', -- open / kept / cancelled
+    postponed   INTEGER NOT NULL DEFAULT 0,    -- сколько раз переносил
+    closed_day  TEXT,
+    quest_id    INTEGER,                       -- квест, через который начислен XP
+    last_nudge  TEXT                           -- когда бот последний раз спрашивал «когда?»
+);
+
 -- Открытые достижения (навсегда, даже если потом что-то отменил)
 CREATE TABLE IF NOT EXISTS achievements (
     key         TEXT PRIMARY KEY,

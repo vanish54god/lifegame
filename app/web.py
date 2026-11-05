@@ -17,6 +17,7 @@ from . import rules
 from .auth import Auth
 from .config import Config
 from .game import SHOP_KINDS, Game, GameError, game_day
+from .promise_text import parse_promise
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
@@ -63,6 +64,15 @@ class ItemPatch(BaseModel):
 class SettingsIn(BaseModel):
     remind_morning: str = ""
     remind_evening: str = ""
+    remind_promises: str = "10:00"
+
+class PromiseIn(BaseModel):
+    text: str = Field(max_length=300)
+
+class PromisePatch(BaseModel):
+    action: str | None = None          # keep / cancel
+    due: date | None = None
+    clear_due: bool = False
 
 
 def create_app(cfg: Config, game: Game, auth: Auth) -> FastAPI:
@@ -96,7 +106,8 @@ def create_app(cfg: Config, game: Game, auth: Auth) -> FastAPI:
             resp.headers["Cache-Control"] = "no-store"
         return resp
 
-    def require_auth(request: Request) -> str:
+    async def require_auth(request: Request) -> str:
+        # async — чтобы выполнялась в том же потоке, что и всё остальное (SQLite не любит потоки)
         h = request.headers.get("authorization", "")
         token = h[7:] if h.lower().startswith("bearer ") else ""
         if not auth.check(token):
@@ -130,7 +141,8 @@ def create_app(cfg: Config, game: Game, auth: Auth) -> FastAPI:
         return {
             "today": today().isoformat(),
             "categories": [{"key": c.key, "title": c.title, "emoji": c.emoji, "xp_min": c.xp_min,
-                            "xp_max": c.xp_max, "is_main": c.is_main} for c in rules.CATEGORIES.values()],
+                            "xp_max": c.xp_max, "is_main": c.is_main, "pickable": c.pickable}
+                           for c in rules.CATEGORIES.values()],
             "max_main": rules.MAX_MAIN_PER_DAY,
             "shop_kinds": SHOP_KINDS,
             "level_base": rules.LEVEL_BASE, "level_step": rules.LEVEL_STEP,
@@ -156,14 +168,13 @@ def create_app(cfg: Config, game: Game, auth: Auth) -> FastAPI:
 
     @app.patch("/api/quests/{qid}", dependencies=[Depends(require_auth)])
     async def patch_quest(qid: int, body: QuestPatch):
-        result = {}
         if body.title is not None or body.xp is not None or body.day is not None:
             game.edit_quest(qid, body.title, body.xp, body.day)
         if body.status is not None:
             res = game.mark(qid, body.status, today())
-            result = {"level_before": res["level_before"], "level_after": res["level_after"],
-                      "new_achievements": res["new_achievements"]}
-        return {"quest": game.get(qid).to_dict(), **result}
+            return {"quest": res["quest"].to_dict(), "level_before": res["level_before"],
+                    "level_after": res["level_after"], "new_achievements": res["new_achievements"]}
+        return {"quest": game.get(qid).to_dict()}
 
     @app.delete("/api/quests/{qid}", dependencies=[Depends(require_auth)])
     async def delete_quest(qid: int):
@@ -222,18 +233,47 @@ def create_app(cfg: Config, game: Game, auth: Auth) -> FastAPI:
         game.refund(pid)
         return {"ok": True}
 
+    # ================= Обещания =================
+
+    @app.get("/api/promises", dependencies=[Depends(require_auth)])
+    async def promises():
+        t = today()
+        return {"open": game.promises(t), "kept": game.promises(t, "kept")[:20],
+                "stats": game.promise_stats(t), "xp": rules.PROMISE_XP,
+                "fast_xp": round(rules.PROMISE_XP * rules.PROMISE_FAST_MULT),
+                "fast_days": rules.PROMISE_FAST_DAYS}
+
+    @app.post("/api/promises", dependencies=[Depends(require_auth)])
+    async def add_promise(body: PromiseIn):
+        t = today()
+        text, due = parse_promise(body.text, t)
+        return game.add_promise(text, t, due)
+
+    @app.patch("/api/promises/{pid}", dependencies=[Depends(require_auth)])
+    async def patch_promise(pid: int, body: PromisePatch):
+        t = today()
+        if body.action == "keep":
+            res = game.keep_promise(pid, t)
+            return {**res, "promise": res["promise"]}
+        if body.action == "cancel":
+            return {"promise": game.cancel_promise(pid, t)}
+        if body.due is not None or body.clear_due:
+            return {"promise": game.set_promise_due(pid, None if body.clear_due else body.due, t)}
+        raise HTTPException(400, "Нечего менять")
+
     # ================= Настройки =================
 
     @app.get("/api/settings", dependencies=[Depends(require_auth)])
     async def get_settings():
         return {"remind_morning": game.get_setting("remind_morning", ""),
                 "remind_evening": game.get_setting("remind_evening", ""),
+                "remind_promises": game.get_setting("remind_promises", "10:00"),
                 "sessions": auth.sessions_count(),
                 "day_start_hour": cfg.day_start_hour}
 
     @app.put("/api/settings", dependencies=[Depends(require_auth)])
     async def put_settings(body: SettingsIn):
-        for key in ("remind_morning", "remind_evening"):
+        for key in ("remind_morning", "remind_evening", "remind_promises"):
             val = getattr(body, key).strip()
             if val and not TIME_RE.match(val):
                 raise HTTPException(400, "Время в формате ЧЧ:ММ, например 08:30")

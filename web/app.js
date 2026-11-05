@@ -237,13 +237,15 @@ function questCard(q, mode) {
 
 async function renderToday() {
   const day = state.playerDay || state.meta.today;
-  const [d] = await Promise.all([api("GET", "/day/" + day), loadHud()]);
+  const isToday = !state.playerDay || state.playerDay === state.meta.today;
+  const [d, , prom] = await Promise.all([api("GET", "/day/" + day), loadHud(), isToday ? api("GET", "/promises") : null]);
   state.meta.today = d.today;
   const qs = d.quests;
   const canPlay = day <= d.today;
   const planned = qs.reduce((s, q) => s + q.xp, 0);
   const got = d.stats.xp_on_day;
-  const main = qs.filter(q => q.is_main), bonus = qs.filter(q => !q.is_main);
+  const main = qs.filter(q => q.is_main), bonus = qs.filter(q => !q.is_main && q.category !== "promise");
+  const keptToday = qs.filter(q => q.category === "promise");
   const mainDone = main.filter(q => q.status === "done").length;
 
   let html = `<div class="dayhead">
@@ -263,7 +265,7 @@ async function renderToday() {
     </div>`;
   }
 
-  if (!qs.length) {
+  if (!qs.some(q => q.category !== "promise")) {
     html += `<div class="empty" style="margin-top:16px"><div class="h3">${canPlay ? "Квестов нет" : "План пуст"}</div>
       <p>Админ ещё не настроил ${day === d.today ? "этот день" : "день"}.</p>
       <button class="btn btn-accent" data-act="toAdmin" data-day="${day}">Настроить</button></div>`;
@@ -271,13 +273,80 @@ async function renderToday() {
     const mode = canPlay ? "player" : "view";
     if (main.length) html += `<div class="h2">Основные</div>` + main.map(q => questCard(q, mode)).join("");
     if (bonus.length) html += `<div class="h2">Бонусные</div>` + bonus.map(q => questCard(q, mode)).join("");
-    if (!main.length) html += `<p class="muted small">⚠️ Нет основных квестов — день не пойдёт в серию.</p>`;
+    if (!main.length && qs.some(q => catOf(q.category).pickable)) html += `<p class="muted small">⚠️ Нет основных квестов — день не пойдёт в серию.</p>`;
     if (canPlay && main.length && mainDone === main.length) {
       html += `<div class="card center" style="margin-top:14px;border-color:var(--good)"><b>✓ День засчитан в серию.</b> <span class="muted">Бонусы — сверху.</span></div>`;
     }
   }
+  if (prom) html += promisesBlock(prom, keptToday);
+  else if (keptToday.length) html += `<div class="h2">💌 Сдержано</div>` + keptToday.map(q => questCard(q, canPlay ? "player" : "view")).join("");
   view.innerHTML = html;
 }
+
+// ---------- Обещания ----------
+
+function promiseDueOptions(p) {
+  const t = state.meta.today, sat = addDays(t, (6 - parseDay(t).getDay()) % 7);
+  const opts = [["", "📅"], [t, "Сегодня"], [addDays(t, 1), "Завтра"], [sat, "На выходных"], [addDays(t, 7), "Через неделю"], ["none", "Без срока"]];
+  return opts.map(([v, l]) => `<option value="${v}">${l}</option>`).join("");
+}
+
+function promisesBlock(prom, keptToday = []) {
+  const st = prom.stats;
+  let html = `<div class="h2">💌 Обещания</div>
+    <form class="row" data-submit="addPromise" style="margin-bottom:10px">
+      <input class="input" name="text" maxlength="300" placeholder="забрать посылку в пятницу" required>
+      <button class="btn btn-accent" type="submit">＋</button>
+    </form>`;
+  if (!prom.open.length) {
+    html += `<div class="empty small">Открытых обещаний нет 🧹 Срок можно писать прямо в тексте: «завтра», «в пятницу», «на выходных», «до 12.11».</div>`;
+  }
+  for (const p of prom.open) {
+    const meta = [p.due_label];
+    if (!p.due && p.age >= 2) meta.push(`висит ${p.age} дн`);
+    if (p.postponed) meta.push(`переносил ${p.postponed}×`);
+    html += `<div class="quest promise ${p.overdue ? "overdue" : ""}">
+      <div class="q-body"><div class="q-title">${esc(p.text)}</div>
+        <div class="q-meta"><span class="tag">${p.overdue ? "⚠️ " : ""}${esc(meta.join(" · "))}</span></div></div>
+      <div class="q-xp">${p.xp_now} XP</div>
+      <div class="q-actions">
+        <button class="btn btn-icon btn-good" data-act="pKeep" data-id="${p.id}" aria-label="Сдержал">✓</button>
+        <select class="btn btn-icon pdue" data-input="pDue" data-id="${p.id}" aria-label="Срок">${promiseDueOptions(p)}</select>
+        <button class="btn btn-icon btn-sm btn-ghost" data-act="pCancel" data-id="${p.id}" aria-label="Отменили вместе">✕</button>
+      </div></div>`;
+  }
+  if (keptToday.length) html += `<div class="h3" style="margin-top:14px">Сдержано сегодня</div>` + keptToday.map(q => questCard(q, "player")).join("");
+  html += `<p class="muted small">✓ сдержал: +${prom.xp} XP, за ${prom.fast_days} дня — +${prom.fast_xp}. ✕ — отменили вместе, без штрафа.
+    ${st.kept ? `<br>Сдержано всего: <b>${st.kept}</b>, из них в срок ${st.on_time}.` : ""}</p>`;
+  return html;
+}
+
+actions.addPromise = async form => {
+  const p = await api("POST", "/promises", { text: form.text.value });
+  toast(`💌 Записал: ${esc(p.text)} · <b>${esc(p.due_label)}</b>`);
+  await renderToday();
+};
+actions.pKeep = async el => {
+  el.disabled = true;
+  const res = await api("PATCH", "/promises/" + el.dataset.id, { action: "keep" });
+  splash("Обещание сдержано", `+${res.xp} XP${res.fast ? " · быстро!" : ""}`);
+  celebrate(res);
+  await renderToday();
+};
+actions.pCancel = async el => {
+  if (!confirm("Отменили вместе? (без XP и без штрафа)")) return;
+  await api("PATCH", "/promises/" + el.dataset.id, { action: "cancel" });
+  await renderToday();
+};
+actions.pDue = async el => {
+  if (!el.value) return;
+  const body = el.value === "none" ? { clear_due: true } : { due: el.value };
+  try {
+    const r = await api("PATCH", "/promises/" + el.dataset.id, body);
+    toast("📅 Срок: " + esc(r.promise.due_label));
+    await renderToday();
+  } catch (e) { toastErr(e); }
+};
 
 actions.pday = el => {
   const n = Number(el.dataset.n);
@@ -338,7 +407,7 @@ async function renderAdmin() {
     <form class="card" data-submit="addQuest">
       <label class="field"><span>Категория</span></label>
       <div class="chips" style="margin:-6px 0 14px">
-        ${state.meta.categories.map(c => `<button type="button" class="chip ${f.cat === c.key ? "on" : ""}" data-act="fcat" data-cat="${c.key}">${c.emoji} ${esc(c.title)}</button>`).join("")}
+        ${state.meta.categories.filter(c => c.pickable).map(c => `<button type="button" class="chip ${f.cat === c.key ? "on" : ""}" data-act="fcat" data-cat="${c.key}">${c.emoji} ${esc(c.title)}</button>`).join("")}
       </div>
       <label class="field"><span>XP — обычно ${cat.xp_min}–${cat.xp_max}</span>
         <div class="row">
@@ -673,6 +742,7 @@ async function renderSettings() {
       <p class="muted small" style="margin-top:0">Необязательно. Оставь поле пустым — напоминания не будет.</p>
       <label class="field"><span>☀️ Утро: «игра началась» + квесты</span><input class="input" type="time" name="morning" value="${esc(st.remind_morning)}"></label>
       <label class="field"><span>🌙 Вечер: «время админа»</span><input class="input" type="time" name="evening" value="${esc(st.remind_evening)}"></label>
+      <label class="field"><span>💌 Обещания: просроченные, на сегодня и «зависшие»</span><input class="input" type="time" name="promises" value="${esc(st.remind_promises)}"></label>
       <button class="btn btn-accent wide" type="submit">Сохранить</button>
     </form>
 
@@ -697,7 +767,7 @@ async function renderSettings() {
 }
 
 actions.saveSettings = async form => {
-  await api("PUT", "/settings", { remind_morning: form.morning.value, remind_evening: form.evening.value });
+  await api("PUT", "/settings", { remind_morning: form.morning.value, remind_evening: form.evening.value, remind_promises: form.promises.value });
   toast("Сохранено");
 };
 actions.logout = async () => {

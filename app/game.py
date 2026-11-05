@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass
 from datetime import date, datetime, timedelta
 
 from . import rules
+from .promise_text import due_label
 
 
 class GameError(Exception):
@@ -103,6 +104,10 @@ ACHIEVEMENTS = [
     ("spender", "💸", "Транжира", "Потрать в магазине 1000 монет", False),
     ("architect", "🏗", "Архитектор", "Создай 10 шаблонов", False),
     ("xp10k", "📈", "Пятизначный", "10 000 XP за всё время", False),
+    # --- обещания ---
+    ("word10", "🤝", "Человек слова", "Сдержи 10 обещаний", False),
+    ("fastword", "⚡", "Быстрее, чем спросят", "5 раз сдержи обещание в течение суток", False),
+    ("cleanslate", "🧹", "Чистый лист", "Закрой все обещания (и хотя бы 5 сдержанных)", False),
     # --- секретные ---
     ("night", "🌃", "Ночная смена", "Выполнил квест между 2 и 5 часами ночи", True),
     ("early", "🐓", "Ранняя пташка", "Выполнил квест до 7 утра", True),
@@ -114,6 +119,7 @@ ACHIEVEMENTS = [
     ("zero", "🪙", "До копейки", "Потратил монеты ровно в ноль", True),
     ("fri13", "🐈‍⬛", "Пятница, 13", "Выполнил квест в пятницу 13-го", True),
     ("newyear", "🎄", "С Новым годом!", "Выполнил квест 1 января", True),
+    ("knight", "🌹", "Рыцарь", "Сдержал 50 обещаний", True),
 ]
 
 
@@ -205,6 +211,17 @@ class Game:
     def mark(self, quest_id: int, status: str, today: date) -> dict:
         """То же, что set_status, но ещё сообщает про новые достижения."""
         before = self._achieved(today)
+        q0 = self.get(quest_id)
+        if q0.category.key == "promise" and status != "done":
+            # отменил «сдержал»: XP убирается, обещание снова открыто
+            lvl_before = self.stats().level.level
+            self.conn.execute("UPDATE promises SET status='open', closed_day=NULL, quest_id=NULL WHERE quest_id=?",
+                              (quest_id,))
+            self.conn.execute("DELETE FROM quests WHERE id = ?", (quest_id,))
+            self.conn.commit()
+            q0.status = "todo"
+            return {"quest": q0, "level_before": lvl_before, "level_after": self.stats().level.level,
+                    "new_achievements": []}
         q, lvl_before, lvl_after = self.set_status(quest_id, status)
         new = [a for a in self.full_stats(today)["achievements"]
                if a["done"] and a["key"] not in before]
@@ -332,6 +349,120 @@ class Game:
         self.conn.execute("DELETE FROM purchases WHERE id = ?", (purchase_id,))
         self.conn.commit()
 
+    # ================= Обещания =================
+
+    def _promise(self, row: sqlite3.Row, today: date) -> dict:
+        p = dict(row)
+        due = date.fromisoformat(p["due"]) if p["due"] else None
+        p["age"] = (today - date.fromisoformat(p["created_day"])).days
+        p["overdue"] = p["status"] == "open" and due is not None and due < today
+        p["due_label"] = due_label(due, today)
+        p["xp_now"] = self.promise_xp(p, today)
+        return p
+
+    @staticmethod
+    def promise_xp(p: dict, today: date) -> int:
+        fast = (today - date.fromisoformat(p["created_day"])).days <= rules.PROMISE_FAST_DAYS
+        return round(rules.PROMISE_XP * (rules.PROMISE_FAST_MULT if fast else 1))
+
+    def promise(self, pid: int, today: date) -> dict:
+        row = self.conn.execute("SELECT * FROM promises WHERE id = ?", (pid,)).fetchone()
+        if row is None:
+            raise GameError("Такого обещания нет")
+        return self._promise(row, today)
+
+    def add_promise(self, text: str, today: date, due: date | None = None) -> dict:
+        text = text.strip()
+        if not text:
+            raise GameError("Напиши, что обещал")
+        if len(text) > 300:
+            raise GameError("Слишком длинно — сократи")
+        cur = self.conn.execute("INSERT INTO promises (text, created_day, due) VALUES (?, ?, ?)",
+                                (text, today.isoformat(), due.isoformat() if due else None))
+        self.conn.commit()
+        return self.promise(cur.lastrowid, today)
+
+    def promises(self, today: date, status: str = "open") -> list[dict]:
+        rows = self.conn.execute("SELECT * FROM promises WHERE status = ?", (status,)).fetchall()
+        items = [self._promise(r, today) for r in rows]
+        if status == "open":
+            # сначала просроченные и с ближайшим сроком, потом без срока — самые старые сверху
+            items.sort(key=lambda p: (p["due"] is None, p["due"] or "", -p["age"]))
+        else:
+            items.sort(key=lambda p: p["closed_day"] or "", reverse=True)
+        return items
+
+    def set_promise_due(self, pid: int, due: date | None, today: date) -> dict:
+        p = self.promise(pid, today)
+        if p["status"] != "open":
+            raise GameError("Обещание уже закрыто")
+        moved = 1 if p["due"] and (due is None or due.isoformat() > p["due"]) else 0
+        self.conn.execute("UPDATE promises SET due = ?, postponed = postponed + ? WHERE id = ?",
+                          (due.isoformat() if due else None, moved, pid))
+        self.conn.commit()
+        return self.promise(pid, today)
+
+    def keep_promise(self, pid: int, today: date) -> dict:
+        """Сдержал: создаётся выполненный квест «💌 …» с XP, считаются уровни и достижения."""
+        p = self.promise(pid, today)
+        if p["status"] != "open":
+            raise GameError("Обещание уже закрыто")
+        before = self._achieved(today)
+        lvl_before = self.stats().level.level
+        now = datetime.now(self.tz).replace(tzinfo=None).isoformat(timespec="seconds")
+        cur = self.conn.execute(
+            "INSERT INTO quests (day, category, title, xp, status, done_at) VALUES (?, 'promise', ?, ?, 'done', ?)",
+            (today.isoformat(), p["text"], p["xp_now"], now))
+        self.conn.execute("UPDATE promises SET status = 'kept', closed_day = ?, quest_id = ? WHERE id = ?",
+                          (today.isoformat(), cur.lastrowid, pid))
+        self.conn.commit()
+        new = [a for a in self.full_stats(today)["achievements"] if a["done"] and a["key"] not in before]
+        return {"promise": self.promise(pid, today), "xp": p["xp_now"],
+                "fast": p["xp_now"] > rules.PROMISE_XP,
+                "level_before": lvl_before, "level_after": self.stats().level.level,
+                "new_achievements": new}
+
+    def cancel_promise(self, pid: int, today: date) -> dict:
+        """Отменили вместе (договорились, что не нужно) — без XP и без штрафа."""
+        p = self.promise(pid, today)
+        if p["status"] != "open":
+            raise GameError("Обещание уже закрыто")
+        self.conn.execute("UPDATE promises SET status = 'cancelled', closed_day = ? WHERE id = ?",
+                          (today.isoformat(), pid))
+        self.conn.commit()
+        return self.promise(pid, today)
+
+    def promise_stats(self, today: date) -> dict:
+        rows = self.conn.execute("SELECT * FROM promises").fetchall()
+        kept = [r for r in rows if r["status"] == "kept"]
+        on_time = [r for r in kept if not r["due"] or r["closed_day"] <= r["due"]]
+        fast = [r for r in kept if (date.fromisoformat(r["closed_day"]) - date.fromisoformat(r["created_day"])).days <= 1]
+        return {
+            "open": sum(1 for r in rows if r["status"] == "open"),
+            "overdue": sum(1 for r in rows if r["status"] == "open" and r["due"] and r["due"] < today.isoformat()),
+            "kept": len(kept), "on_time": len(on_time), "fast": len(fast),
+            "cancelled": sum(1 for r in rows if r["status"] == "cancelled"),
+        }
+
+    def promises_to_nudge(self, today: date) -> dict:
+        """Что напомнить сегодня: просроченные, на сегодня, на завтра и «зависшие» без срока."""
+        items = self.promises(today)
+        t, tm = today.isoformat(), (today + timedelta(days=1)).isoformat()
+        hanging = [p for p in items if p["due"] is None and p["age"] >= rules.PROMISE_NUDGE_AFTER
+                   and (p["last_nudge"] is None or
+                        (today - date.fromisoformat(p["last_nudge"])).days >= rules.PROMISE_NUDGE_AFTER)]
+        return {
+            "overdue": [p for p in items if p["overdue"]],
+            "today": [p for p in items if p["due"] == t],
+            "tomorrow": [p for p in items if p["due"] == tm],
+            "hanging": hanging,
+        }
+
+    def mark_nudged(self, ids: list[int], today: date) -> None:
+        self.conn.executemany("UPDATE promises SET last_nudge = ? WHERE id = ?",
+                              [(today.isoformat(), i) for i in ids])
+        self.conn.commit()
+
     # ================= Статистика =================
 
     def stats(self, day: date | None = None) -> Stats:
@@ -450,6 +581,7 @@ class Game:
         spent = self.conn.execute("SELECT COALESCE(SUM(cost), 0) FROM purchases").fetchone()[0]
         bought = self.conn.execute("SELECT COUNT(*) FROM purchases").fetchone()[0] > 0
         n_templates = self.conn.execute("SELECT COUNT(*) FROM templates").fetchone()[0]
+        ps = self.promise_stats(today)
 
         # 10 подряд без провала
         run = best_run = 0
@@ -510,6 +642,9 @@ class Game:
             "fri13": any(date.fromisoformat(r["day"]).day == 13 and date.fromisoformat(r["day"]).weekday() == 4
                          for r in done_rows),
             "newyear": any(r["day"][5:] == "01-01" for r in done_rows),
+            "word10": ps["kept"] >= 10, "fastword": ps["fast"] >= 5,
+            "cleanslate": ps["kept"] >= 5 and ps["open"] == 0,
+            "knight": ps["kept"] >= 50,
         }
 
         # Открытое достижение остаётся открытым навсегда

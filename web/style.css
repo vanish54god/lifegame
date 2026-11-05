@@ -274,3 +274,9 @@ details.card[open] > summary { margin-bottom: 12px; }
 @media (min-width: 900px) {
   .view { padding-top: 12px; }
 }
+
+/* ---------- Обещания ---------- */
+.quest.promise { border-left-color: #c0607a; }
+.quest.promise.overdue { border-left-color: var(--bad); }
+.quest.promise .q-xp { color: #e58aa0; }
+select.pdue { appearance: none; -webkit-appearance: none; text-align: center; text-align-last: center; padding: 0; font-size: 16px; }

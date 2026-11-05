@@ -14,6 +14,7 @@ class Category:
     xp_min: int       # рекомендованный минимум XP
     xp_max: int       # рекомендованный максимум XP (можно превысить для «ультра хард»)
     is_main: bool     # основное задание или бонусное
+    pickable: bool = True   # можно ли выбрать при добавлении квеста
 
 
 CATEGORIES: dict[str, Category] = {
@@ -23,6 +24,8 @@ CATEGORIES: dict[str, Category] = {
     "sleep": Category("sleep", "Сон", "😴", 0, 100, True),
     "code":  Category("code",  "Программирование", "💻", 50, 200, True),
     "bonus": Category("bonus", "Бонус", "⭐", 10, 200, False),
+    # квесты этой категории создаются сами, когда сдерживаешь обещание
+    "promise": Category("promise", "Обещание", "💌", 30, 150, False, pickable=False),
 }
 
 # Слова, которыми можно назвать категорию в команде боту
@@ -35,7 +38,13 @@ ALIASES: dict[str, str] = {
     "бонус": "bonus", "bonus": "bonus",
 }
 
-MAX_MAIN_PER_DAY = 3      # основных заданий в день: от 1 до 3
+MAX_MAIN_PER_DAY = 3
+
+# Обещания
+PROMISE_XP = 50            # за сдержанное обещание
+PROMISE_FAST_DAYS = 3      # сдержал за столько дней с момента обещания —
+PROMISE_FAST_MULT = 1.5    # …получи XP × 1.5
+PROMISE_NUDGE_AFTER = 3    # обещание без срока висит столько дней — бот спрашивает «когда?»      # основных заданий в день: от 1 до 3
 COINS_PER_XP = 10         # монеты = XP / 10
 
 # Уровни: на 1-й уровень нужно 100 XP, на каждый следующий на 50 больше

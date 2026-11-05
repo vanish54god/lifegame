@@ -11,7 +11,7 @@ from html import escape
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.filters import Command, CommandObject, CommandStart
+from aiogram.filters import Command, CommandObject, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (BotCommand, CallbackQuery, InlineKeyboardButton as Btn,
@@ -22,13 +22,16 @@ from . import rules
 from .auth import Auth
 from .config import Config
 from .game import SHOP_KINDS, Game, GameError, game_day
+from .promise_text import parse_promise
 
 # Тексты кнопок постоянной клавиатуры
 K_TODAY, K_ME, K_ADMIN, K_SHOP = "🎮 Сегодня", "👤 Профиль", "🛠 Админ", "🛒 Магазин"
+K_PROM = "💌 Обещания"
 
 MAIN_KB = ReplyKeyboardMarkup(
     keyboard=[[KeyboardButton(text=K_TODAY), KeyboardButton(text=K_ME)],
-              [KeyboardButton(text=K_ADMIN), KeyboardButton(text=K_SHOP)]],
+              [KeyboardButton(text=K_ADMIN), KeyboardButton(text=K_SHOP)],
+              [KeyboardButton(text=K_PROM)]],
     resize_keyboard=True, is_persistent=True,
 )
 
@@ -38,6 +41,11 @@ HELP = """<b>🎮 Как играть</b>
 Утром ты <b>игрок</b>: «🎮 Сегодня» и отмечай ✅ / ❌.
 Монеты тратятся в «🛒 Магазине».
 
+<b>💌 Обещания</b> — просто напиши боту:
+<code>обещал забрать посылку в пятницу</code>
+Срок бот поймёт сам (сегодня, завтра, в пятницу, на выходных, до 12.11).
+Без срока тоже можно — через пару дней бот спросит «когда?».
+
 <b>Команды на всякий случай</b>
 /add <i>категория xp название</i> — квест на завтра
 /bonus <i>xp название</i> — бонус на завтра
@@ -46,6 +54,10 @@ HELP = """<b>🎮 Как играть</b>
 /web — войти в веб-приложение
 /logout_all — выйти из приложения на всех устройствах
 /rules — категории и границы XP"""
+
+
+class NewPromise(StatesGroup):
+    text = State()
 
 
 class AddQuest(StatesGroup):
@@ -92,7 +104,7 @@ class UI:
         if not quests:
             lines.append("Квестов нет. Админ, твой выход 👇" if day >= t else "В этот день квестов не было.")
         lines += [escape(q.line()) for q in quests]
-        if quests and not any(q.is_main for q in quests):
+        if any(q.category.pickable for q in quests) and not any(q.is_main for q in quests):
             lines.append("\n⚠️ Нет ни одного основного задания (нужно 1–3)")
         if planning:
             lines.append(f"\nВсего можно взять: <b>{sum(q.xp for q in quests)}</b> XP")
@@ -110,6 +122,15 @@ class UI:
                              Btn(text="❌", callback_data=f"failed:{q.id}")])
             else:
                 rows.append([Btn(text=f"↩️ {short(q.title)}", callback_data=f"todo:{q.id}")])
+        if day == t:
+            due = [p for p in self.game.promises(t) if p["due"] and p["due"] <= t.isoformat()]
+            if due:
+                lines.append("\n💌 <b>Обещания на сегодня</b>")
+                for p in due:
+                    mark = "⚠️ " if p["overdue"] else ""
+                    lines.append(f"{mark}• {escape(p['text'])} <i>({p['due_label']})</i>")
+                    rows.append([Btn(text=f"💌 {short(p['text'], 24)}", callback_data=f"p:keep:{p['id']}:d"),
+                                 Btn(text="📅", callback_data=f"p:menu:{p['id']}")])
         if off in (0, 1):
             rows.append([Btn(text="➕ Квест", callback_data=f"adm:add:{off}"),
                          Btn(text="📋 Шаблон", callback_data=f"adm:tpl:{off}")])
@@ -147,6 +168,69 @@ class UI:
              Btn(text="⏪ Вчера", callback_data="adm:yday")],
             [Btn(text="🌐 Веб-приложение", callback_data="adm:web")],
         )
+
+    def render_promises(self) -> tuple[str, InlineKeyboardMarkup]:
+        t = self.today()
+        items = self.game.promises(t)
+        st = self.game.promise_stats(t)
+        lines = ["💌 <b>Обещания</b>", ""]
+        rows = []
+        if not items:
+            lines.append("Открытых обещаний нет 🧹\n\nЧтобы записать, просто напиши боту:\n"
+                         "<code>обещал сходить в кино на выходных</code>")
+        for p in items:
+            mark = "⚠️ " if p["overdue"] else ""
+            extra = f", висит {p['age']} дн" if p["due"] is None and p["age"] >= 2 else ""
+            moved = f", переносил {p['postponed']}×" if p["postponed"] else ""
+            lines.append(f"{mark}• {escape(p['text'])} <i>({p['due_label']}{extra}{moved})</i>")
+            rows.append([Btn(text=f"✅ {short(p['text'], 24)}", callback_data=f"p:keep:{p['id']}:l"),
+                         Btn(text="📅 ⋯", callback_data=f"p:menu:{p['id']}")])
+        if st["kept"]:
+            lines.append(f"\nСдержано: <b>{st['kept']}</b> (в срок {st['on_time']})")
+        lines.append(f"\n✅ — сдержал: +{rules.PROMISE_XP} XP, а если за {rules.PROMISE_FAST_DAYS} дня — "
+                     f"+{round(rules.PROMISE_XP * rules.PROMISE_FAST_MULT)}")
+        rows.append([Btn(text="➕ Новое обещание", callback_data="p:new")])
+        return "\n".join(lines), kb(*rows)
+
+    def render_promise_menu(self, pid: int) -> tuple[str, InlineKeyboardMarkup]:
+        p = self.game.promise(pid, self.today())
+        text = (f"💌 <b>{escape(p['text'])}</b>\n\nСрок: {p['due_label']}"
+                f"\nОбещал {p['age']} дн назад" + (f", переносил {p['postponed']}×" if p["postponed"] else "")
+                + "\n\nКогда сделаешь?")
+        return text, kb(
+            [Btn(text="Сегодня", callback_data=f"p:due:{pid}:0"),
+             Btn(text="Завтра", callback_data=f"p:due:{pid}:1"),
+             Btn(text="На выходных", callback_data=f"p:due:{pid}:we")],
+            [Btn(text="Через неделю", callback_data=f"p:due:{pid}:7"),
+             Btn(text="Без срока", callback_data=f"p:due:{pid}:none")],
+            [Btn(text="✅ Уже сдержал", callback_data=f"p:keep:{pid}:l"),
+             Btn(text="✕ Отменили вместе", callback_data=f"p:cancel:{pid}")],
+            [Btn(text="⬅️ Все обещания", callback_data="p:list")],
+        )
+
+    def promise_nudge(self) -> tuple[str, InlineKeyboardMarkup] | None:
+        """Ежедневное напоминание. None — если напоминать нечего."""
+        t = self.today()
+        n = self.game.promises_to_nudge(t)
+        if not any(n.values()):
+            return None
+        lines, rows = ["💌 <b>Обещания</b>"], []
+        sections = [("overdue", "⚠️ Просрочено"), ("today", "📌 Сегодня"), ("tomorrow", "⏭ Завтра")]
+        for key, title in sections:
+            if n[key]:
+                lines.append(f"\n<b>{title}</b>")
+                for p in n[key]:
+                    lines.append(f"• {escape(p['text'])}")
+                    if key != "tomorrow":
+                        rows.append([Btn(text=f"✅ {short(p['text'], 24)}", callback_data=f"p:keep:{p['id']}:l"),
+                                     Btn(text="📅", callback_data=f"p:menu:{p['id']}")])
+        if n["hanging"]:
+            lines.append("\n<b>🕸 Висят без срока</b> — назначь день, пока не спросили:")
+            for p in n["hanging"]:
+                lines.append(f"• {escape(p['text'])} <i>(уже {p['age']} дн)</i>")
+                rows.append([Btn(text=f"📅 {short(p['text'], 28)}", callback_data=f"p:menu:{p['id']}")])
+            self.game.mark_nudged([p["id"] for p in n["hanging"]], t)
+        return "\n".join(lines), kb(*rows)
 
     def render_shop(self) -> tuple[str, InlineKeyboardMarkup | None]:
         coins = self.game.stats().coins
@@ -249,6 +333,8 @@ def build_router(cfg: Config, game: Game, auth: Auth) -> Router:
             if c.is_main:
                 lines.append(f"{c.emoji} {c.title}: {c.xp_min}–{c.xp_max} XP")
         b = rules.CATEGORIES["bonus"]
+        lines += ["", f"💌 <b>Обещания</b>: {rules.PROMISE_XP} XP, если за {rules.PROMISE_FAST_DAYS} дня — "
+                  f"×{rules.PROMISE_FAST_MULT}"]
         lines += ["", f"<b>Бонусные</b>: {b.xp_min}–{b.xp_max} XP",
                   "", "Границы примерные — за ультра хард можно больше.",
                   f"Уровни: {rules.LEVEL_BASE} XP на первый, дальше +{rules.LEVEL_STEP}.",
@@ -356,7 +442,7 @@ def build_router(cfg: Config, game: Game, auth: Auth) -> Router:
         await state.set_state(AddQuest.category)
         await state.update_data(off=off)
         day = "сегодня" if off == 0 else "завтра"
-        cats = list(rules.CATEGORIES.values())
+        cats = [c for c in rules.CATEGORIES.values() if c.pickable]
         rows = [[Btn(text=f"{c.emoji} {c.title}", callback_data=f"cat:{c.key}") for c in cats[i:i + 2]]
                 for i in range(0, len(cats), 2)]
         await cb.answer()
@@ -538,6 +624,127 @@ def build_router(cfg: Config, game: Game, auth: Auth) -> Router:
         text, markup = ui.render_shop()
         await edit(cb, text, markup)
 
+    # ================= Обещания =================
+
+    @router.message(F.text == K_PROM)
+    @router.message(Command("promises"))
+    async def k_prom(msg: Message, state: FSMContext):
+        await state.clear()
+        text, markup = ui.render_promises()
+        await msg.answer(text, reply_markup=markup)
+
+    async def save_promise(msg: Message, raw: str):
+        t = ui.today()
+        body, due = parse_promise(raw, t)
+        try:
+            p = game.add_promise(body, t, due)
+        except GameError as e:
+            await msg.answer(f"⛔ {escape(str(e))}")
+            return
+        hint = "" if due else f"\nСрока нет — через {rules.PROMISE_NUDGE_AFTER} дня спрошу «когда?». Или назначь сейчас:"
+        markup = kb([Btn(text="📅 Назначить срок", callback_data=f"p:menu:{p['id']}"),
+                     Btn(text="🗑 Ошибся", callback_data=f"p:undo:{p['id']}")],
+                    [Btn(text="💌 Все обещания", callback_data="p:list")])
+        await msg.answer(f"💌 <b>Записал:</b> {escape(p['text'])}\nСрок: <b>{p['due_label']}</b>{hint}",
+                         reply_markup=markup)
+
+    @router.message(StateFilter(None), F.text.regexp(r"(?i)^\s*(я\s+)?(по)?обещ"))
+    async def promise_text(msg: Message):
+        await save_promise(msg, msg.text)
+
+    @router.callback_query(F.data == "p:new")
+    async def p_new(cb: CallbackQuery, state: FSMContext):
+        await state.set_state(NewPromise.text)
+        await cb.answer()
+        await cb.message.answer("💌 Что пообещал? Напиши одним сообщением, срок можно прямо в тексте:\n"
+                                "<i>забрать посылку в пятницу</i>", reply_markup=kb(CANCEL_ROW))
+
+    @router.message(NewPromise.text, F.text)
+    async def p_new_text(msg: Message, state: FSMContext):
+        await state.clear()
+        await save_promise(msg, msg.text)
+
+    @router.callback_query(F.data == "p:list")
+    async def p_list(cb: CallbackQuery, state: FSMContext):
+        await state.clear()
+        await cb.answer()
+        text, markup = ui.render_promises()
+        await edit(cb, text, markup)
+
+    @router.callback_query(F.data.startswith("p:menu:"))
+    async def p_menu(cb: CallbackQuery):
+        try:
+            text, markup = ui.render_promise_menu(int(cb.data.split(":")[2]))
+        except GameError as e:
+            await cb.answer(str(e), show_alert=True)
+            return
+        await cb.answer()
+        await cb.message.answer(text, reply_markup=markup)
+
+    @router.callback_query(F.data.startswith("p:due:"))
+    async def p_due(cb: CallbackQuery):
+        _, _, pid, code = cb.data.split(":")
+        t = ui.today()
+        due = {"0": t, "1": t + timedelta(days=1), "7": t + timedelta(days=7), "none": None,
+               "we": t if t.weekday() == 5 else t + timedelta(days=(5 - t.weekday()) % 7)}[code]
+        try:
+            p = game.set_promise_due(int(pid), due, t)
+        except GameError as e:
+            await cb.answer(str(e), show_alert=True)
+            return
+        await cb.answer(f"Срок: {p['due_label']}")
+        text, markup = ui.render_promises()
+        await edit(cb, text, markup)
+
+    @router.callback_query(F.data.startswith("p:keep:"))
+    async def p_keep(cb: CallbackQuery):
+        parts = cb.data.split(":")
+        try:
+            res = game.keep_promise(int(parts[2]), ui.today())
+        except GameError as e:
+            await cb.answer(str(e), show_alert=True)
+            return
+        await cb.answer(f"💌 СДЕРЖАЛ  +{res['xp']} XP" + ("  ⚡ быстро!" if res["fast"] else ""))
+        if len(parts) > 3 and parts[3] == "d":
+            text, markup = ui.render_day(ui.today())
+        else:
+            text, markup = ui.render_promises()
+        await edit(cb, text, markup)
+        await celebrate(cb.message, res)
+
+    @router.callback_query(F.data.startswith("p:cancel:"))
+    async def p_cancel(cb: CallbackQuery):
+        try:
+            game.cancel_promise(int(cb.data.split(":")[2]), ui.today())
+        except GameError as e:
+            await cb.answer(str(e), show_alert=True)
+            return
+        await cb.answer("Отменено — без штрафа")
+        text, markup = ui.render_promises()
+        await edit(cb, text, markup)
+
+    @router.callback_query(F.data.startswith("p:undo:"))
+    async def p_undo(cb: CallbackQuery):
+        pid = int(cb.data.split(":")[2])
+        try:
+            p = game.promise(pid, ui.today())
+            if p["status"] != "open":
+                raise GameError("Обещание уже закрыто")
+        except GameError as e:
+            await cb.answer(str(e), show_alert=True)
+            return
+        game.conn.execute("DELETE FROM promises WHERE id = ?", (pid,))
+        game.conn.commit()
+        await cb.answer("Удалено")
+        await edit(cb, f"🗑 <s>{escape(p['text'])}</s>")
+
+    # Любой другой текст вне диалогов — подсказка
+    @router.message(StateFilter(None), F.text)
+    async def unknown_text(msg: Message):
+        await msg.answer("Не понял 🤔 Пользуйся кнопками внизу.\n"
+                         "Чтобы записать обещание, начни со слова «обещал»:\n"
+                         "<code>обещал позвонить в субботу</code>", reply_markup=MAIN_KB)
+
     @router.callback_query()
     async def stale(cb: CallbackQuery):
         await cb.answer("Эта кнопка устарела — открой меню заново", show_alert=False)
@@ -552,13 +759,19 @@ async def reminders_loop(bot: Bot, cfg: Config, game: Game) -> None:
         try:
             now = datetime.now(cfg.tz)
             hm, today_str = now.strftime("%H:%M"), now.date().isoformat()
-            for kind in ("morning", "evening"):
-                if game.get_setting(f"remind_{kind}", "") != hm:
+            for kind in ("morning", "evening", "promises"):
+                default = "10:00" if kind == "promises" else ""
+                if game.get_setting(f"remind_{kind}", default) != hm:
                     continue
                 if game.get_setting(f"sent_{kind}") == today_str:
                     continue
                 game.set_setting(f"sent_{kind}", today_str)
-                if kind == "morning":
+                if kind == "promises":
+                    nudge = ui.promise_nudge()
+                    if nudge is None:
+                        continue
+                    text, markup = nudge
+                elif kind == "morning":
                     text, markup = ui.render_day(ui.today(), "☀️ <b>Новый день. Игра началась.</b>")
                 else:
                     plan, _ = ui.render_day(ui.today() + timedelta(days=1))
@@ -582,6 +795,7 @@ COMMANDS = [
     BotCommand(command="admin", description="Режим админа"),
     BotCommand(command="me", description="Уровень, серия, монеты"),
     BotCommand(command="shop", description="Магазин"),
+    BotCommand(command="promises", description="Обещания"),
     BotCommand(command="web", description="Войти в веб-приложение"),
     BotCommand(command="help", description="Помощь"),
 ]
