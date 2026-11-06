@@ -24,6 +24,8 @@ from .config import Config
 from .game import SHOP_KINDS, Game, GameError, game_day
 from .promise_text import parse_promise
 from .bot_finance import K_FIN, FinUI, register_finance
+from .bot_planner import K_BANK, PlanUI, register_planner, time_rows
+from .life import month_bounds
 
 # Тексты кнопок постоянной клавиатуры
 K_TODAY, K_ME, K_ADMIN, K_SHOP = "🎮 Сегодня", "👤 Профиль", "🛠 Админ", "🛒 Магазин"
@@ -31,7 +33,7 @@ K_PROM = "💌 Обещания"
 
 MAIN_KB = ReplyKeyboardMarkup(
     keyboard=[[KeyboardButton(text=K_TODAY), KeyboardButton(text=K_ME)],
-              [KeyboardButton(text=K_ADMIN), KeyboardButton(text=K_SHOP)],
+              [KeyboardButton(text=K_ADMIN), KeyboardButton(text=K_BANK), KeyboardButton(text=K_SHOP)],
               [KeyboardButton(text=K_PROM), KeyboardButton(text=K_FIN)]],
     resize_keyboard=True, is_persistent=True,
 )
@@ -51,6 +53,10 @@ HELP = """<b>🎮 Как играть</b>
 <code>кофе 250</code> · <code>такси 1.5к</code> · <code>+30000 зарплата</code>
 Смены, зарплата, платежи и желания — кнопка «💰 Финансы».
 
+<b>🗃 Банк заданий</b> — все дела, пока не сделаны. 🔥 показывает, что горит.
+Вечером бери из банка в завтрашний день. Не успел — задача сама вернётся в банк.
+⏱ — таймер на квест. ⭐ — оценка дня.
+
 <b>Команды на всякий случай</b>
 /add <i>категория xp название</i> — квест на завтра
 /bonus <i>xp название</i> — бонус на завтра
@@ -69,6 +75,7 @@ class AddQuest(StatesGroup):
     category = State()
     xp = State()
     xp_custom = State()
+    est = State()
     title = State()
 
 
@@ -103,19 +110,28 @@ class UI:
 
     def render_day(self, day: date, header: str | None = None) -> tuple[str, InlineKeyboardMarkup | None]:
         t = self.today()
-        quests = self.game.quests(day)
+        pu = PlanUI(self)
+        quests = [q for q in self.game.quests(day) if q.category.key != "habit"]
         planning = day > t
-        lines = [header or self.day_title(day), ""]
+        lines = [header or self.day_title(day)]
+        if day == t:
+            sb = pu.start_by_line()
+            if sb:
+                lines.append(sb)
+        lines.append("")
         if not quests:
             lines.append("Квестов нет. Админ, твой выход 👇" if day >= t else "В этот день квестов не было.")
-        lines += [escape(q.line()) for q in quests]
+        for q in quests:
+            est = f" · ~{rules.fmt_min(q.est_min)}" if q.est_min and q.status == "todo" else ""
+            lines.append(escape(q.line()) + est + pu.timer_label(q))
         if any(q.category.pickable for q in quests) and not any(q.is_main for q in quests):
             lines.append("\n⚠️ Нет ни одного основного задания (нужно 1–3)")
         if planning:
             lines.append(f"\nВсего можно взять: <b>{sum(q.xp for q in quests)}</b> XP")
+            lines.append(pu.load_line(self.game.planner.load(day)))
         else:
             st = self.game.stats(day)
-            lines.append(f"\nЗа день: <b>{st.xp_on_day}</b> / {sum(q.xp for q in quests)} XP")
+            lines.append(f"\nЗа день: <b>{st.xp_on_day}</b> XP")
 
         off = (day - t).days
         rows = []
@@ -123,8 +139,12 @@ class UI:
             if planning:
                 rows.append([Btn(text=f"🗑 {short(q.title)}", callback_data=f"del:{q.id}")])
             elif q.status == "todo":
-                rows.append([Btn(text=f"✅ {short(q.title)}", callback_data=f"done:{q.id}"),
-                             Btn(text="❌", callback_data=f"failed:{q.id}")])
+                row = [Btn(text=f"✅ {short(q.title, 22)}", callback_data=f"done:{q.id}")]
+                if day == t:
+                    row.append(Btn(text="⏸" if q.timer_start else "⏱",
+                                   callback_data=f"tm:{'pause' if q.timer_start else 'start'}:{q.id}"))
+                row.append(Btn(text="❌", callback_data=f"failed:{q.id}"))
+                rows.append(row)
             else:
                 rows.append([Btn(text=f"↩️ {short(q.title)}", callback_data=f"todo:{q.id}")])
         if day == t:
@@ -136,9 +156,17 @@ class UI:
                     lines.append(f"{mark}• {escape(p['text'])} <i>({p['due_label']})</i>")
                     rows.append([Btn(text=f"💌 {short(p['text'], 24)}", callback_data=f"p:keep:{p['id']}:d"),
                                  Btn(text="📅", callback_data=f"p:menu:{p['id']}")])
+            hl, hr = pu.habit_block()
+            lines += hl
+            rows += hr
         if off in (0, 1):
             rows.append([Btn(text="➕ Квест", callback_data=f"adm:add:{off}"),
+                         Btn(text="🗃 Из банка", callback_data=f"bk:pick:{off}"),
                          Btn(text="📋 Шаблон", callback_data=f"adm:tpl:{off}")])
+        if off in (0, -1):
+            score = self.game.life.rating(day)
+            rows.append([Btn(text=f"⭐ День: {score}/10" if score else "⭐ Оценить день",
+                             callback_data=f"rt:ask:{-off}")])
         return "\n".join(lines), kb(*rows)
 
     def render_me(self) -> str:
@@ -161,12 +189,20 @@ class UI:
         tomorrow = self.today() + timedelta(days=1)
         qs = self.game.quests(tomorrow)
         mains = sum(1 for q in qs if q.is_main)
+        pu = PlanUI(self)
+        hot = [x for x in self.game.planner.schedulable(self.today()) if x["heat"] >= 2]
         text = (f"🛠 <b>Режим админа</b>\n\nНа завтра: {len(qs)} квест(ов), "
                 f"основных {mains}/{rules.MAX_MAIN_PER_DAY}, "
-                f"{sum(q.xp for q in qs)} XP")
+                f"{sum(q.xp for q in qs)} XP\n" + pu.load_line(self.game.planner.load(tomorrow)))
+        if hot:
+            text += "\n\n🔥 <b>Горит в банке:</b>\n" + "\n".join(
+                f"{x['heat_emoji']} {escape(x.get('parent_title', '') + ': ' if x.get('parent_title') else '')}"
+                f"{escape(x['title'])} — {x['days_left']} дн" for x in hot[:5])
         return text, kb(
             [Btn(text="➕ Квест на завтра", callback_data="adm:add:1"),
              Btn(text="➕ На сегодня", callback_data="adm:add:0")],
+            [Btn(text="🗃 Из банка → завтра", callback_data="bk:pick:1"),
+             Btn(text="🗃 Банк", callback_data="bk:list")],
             [Btn(text="📋 Шаблон → завтра", callback_data="adm:tpl:1"),
              Btn(text="📋 → сегодня", callback_data="adm:tpl:0")],
             [Btn(text="🗓 План на завтра", callback_data="adm:plan"),
@@ -218,7 +254,8 @@ class UI:
         t = self.today()
         n = self.game.promises_to_nudge(t)
         pay_lines, pay_rows = FinUI(self).digest_lines()
-        if not any(n.values()) and not pay_lines:
+        bank_lines, bank_rows = PlanUI(self).digest_lines()
+        if not any(n.values()) and not pay_lines and not bank_lines:
             return None
         lines, rows = ["☀️ <b>Сводка на сегодня</b>"], []
         if any(n.values()):
@@ -238,8 +275,8 @@ class UI:
                 lines.append(f"• {escape(p['text'])} <i>(уже {p['age']} дн)</i>")
                 rows.append([Btn(text=f"📅 {short(p['text'], 28)}", callback_data=f"p:menu:{p['id']}")])
             self.game.mark_nudged([p["id"] for p in n["hanging"]], t)
-        lines += pay_lines
-        rows += pay_rows
+        lines += bank_lines + pay_lines
+        rows += bank_rows + pay_rows
         return "\n".join(lines), kb(*rows)
 
     def render_shop(self) -> tuple[str, InlineKeyboardMarkup | None]:
@@ -465,7 +502,7 @@ def build_router(cfg: Config, game: Game, auth: Auth) -> Router:
         rows = [[Btn(text=f"{c.emoji} {c.title}", callback_data=f"cat:{c.key}") for c in cats[i:i + 2]]
                 for i in range(0, len(cats), 2)]
         await cb.answer()
-        await edit(cb, f"➕ <b>Новый квест на {day}</b>\n\nШаг 1/3 — категория:", kb(*rows, CANCEL_ROW))
+        await edit(cb, f"➕ <b>Новый квест на {day}</b>\n\nШаг 1/4 — категория:", kb(*rows, CANCEL_ROW))
 
     @router.callback_query(AddQuest.category, F.data.startswith("cat:"))
     async def pick_cat(cb: CallbackQuery, state: FSMContext):
@@ -479,7 +516,7 @@ def build_router(cfg: Config, game: Game, auth: Auth) -> Router:
         rows = [[Btn(text=str(v), callback_data=f"xp:{v}") for v in presets],
                 [Btn(text="✏️ Своё число", callback_data="xp:custom")], CANCEL_ROW]
         await cb.answer()
-        await edit(cb, f"{cat.emoji} <b>{cat.title}</b>\n\nШаг 2/3 — сколько XP?\n"
+        await edit(cb, f"{cat.emoji} <b>{cat.title}</b>\n\nШаг 2/4 — сколько XP?\n"
                        f"Обычно {cat.xp_min}–{cat.xp_max}, за ультра хард можно больше.", kb(*rows))
 
     @router.callback_query(AddQuest.xp, F.data.startswith("xp:"))
@@ -491,8 +528,8 @@ def build_router(cfg: Config, game: Game, auth: Auth) -> Router:
             await edit(cb, "✏️ Напиши число XP сообщением:", kb(CANCEL_ROW))
             return
         await state.update_data(xp=int(val))
-        await state.set_state(AddQuest.title)
-        await edit(cb, f"<b>{val} XP</b>\n\nШаг 3/3 — напиши название квеста сообщением:", kb(CANCEL_ROW))
+        await state.set_state(AddQuest.est)
+        await edit(cb, f"<b>{val} XP</b>\n\nШаг 3/4 — сколько примерно времени?", kb(*time_rows("qt"), CANCEL_ROW))
 
     @router.message(AddQuest.xp_custom, F.text)
     async def custom_xp(msg: Message, state: FSMContext):
@@ -500,8 +537,18 @@ def build_router(cfg: Config, game: Game, auth: Auth) -> Router:
             await msg.answer("Нужно целое число, например <code>650</code>")
             return
         await state.update_data(xp=int(msg.text.strip()))
+        await state.set_state(AddQuest.est)
+        await msg.answer(f"<b>{int(msg.text)} XP</b>\n\nШаг 3/4 — сколько примерно времени?",
+                         reply_markup=kb(*time_rows("qt"), CANCEL_ROW))
+
+    @router.callback_query(AddQuest.est, F.data.startswith("qt:"))
+    async def pick_est(cb: CallbackQuery, state: FSMContext):
+        m = int(cb.data.split(":")[1])
+        await state.update_data(est=m or None)
         await state.set_state(AddQuest.title)
-        await msg.answer(f"<b>{int(msg.text)} XP</b>\n\nШаг 3/3 — напиши название квеста:", reply_markup=kb(CANCEL_ROW))
+        await cb.answer()
+        await edit(cb, (f"⏱ {rules.fmt_min(m)}\n\n" if m else "") + "Шаг 4/4 — напиши название квеста сообщением:",
+                   kb(CANCEL_ROW))
 
     @router.message(AddQuest.title, F.text)
     async def got_title(msg: Message, state: FSMContext):
@@ -509,7 +556,7 @@ def build_router(cfg: Config, game: Game, auth: Auth) -> Router:
         await state.clear()
         try:
             q, warn = game.add_quest(ui.today() + timedelta(days=data["off"]),
-                                     rules.CATEGORIES[data["cat"]], msg.text, data["xp"])
+                                     rules.CATEGORIES[data["cat"]], msg.text, data["xp"], data.get("est"))
         except GameError as e:
             await msg.answer(f"⛔ {escape(str(e))}")
             return
@@ -557,7 +604,7 @@ def build_router(cfg: Config, game: Game, auth: Auth) -> Router:
     async def save_tpl(cb: CallbackQuery):
         try:
             q = game.get(int(cb.data.split(":")[1]))
-            game.add_template(q.category, q.title, q.xp)
+            game.add_template(q.category, q.title, q.xp, q.est_min)
         except GameError as e:
             await cb.answer(str(e), show_alert=True)
             return
@@ -604,6 +651,13 @@ def build_router(cfg: Config, game: Game, auth: Auth) -> Router:
         await edit(cb, text, markup)
         if res:
             await celebrate(cb.message, res)
+            fresh = game.get(q.id) if action == "done" else None
+            if fresh and fresh.est_min and fresh.pace is None and fresh.timer_sec < 60:
+                await cb.message.answer(
+                    f"⏱ «{escape(short(q.title, 40))}» — по времени как вышло? (можно не отвечать)",
+                    reply_markup=kb([Btn(text="⚡ Быстрее", callback_data=f"pc:{q.id}:fast"),
+                                     Btn(text="👌 Как думал", callback_data=f"pc:{q.id}:ok"),
+                                     Btn(text="🐢 Дольше", callback_data=f"pc:{q.id}:slow")]))
 
     # ================= Магазин =================
 
@@ -757,6 +811,12 @@ def build_router(cfg: Config, game: Game, auth: Auth) -> Router:
         await cb.answer("Удалено")
         await edit(cb, f"🗑 <s>{escape(p['text'])}</s>")
 
+    @router.message(Command("bank"))
+    async def cmd_bank(msg: Message, state: FSMContext):
+        await state.clear()
+        text, markup = PlanUI(ui).bank()
+        await msg.answer(text, reply_markup=markup)
+
     @router.message(Command("finance"))
     async def cmd_finance(msg: Message, state: FSMContext):
         await state.clear()
@@ -764,6 +824,7 @@ def build_router(cfg: Config, game: Game, auth: Auth) -> Router:
         await msg.answer(text, reply_markup=markup)
 
     register_finance(router, ui, edit, celebrate, MAIN_KB)
+    register_planner(router, ui, edit, celebrate)
 
     # Любой другой текст вне диалогов — подсказка
     @router.message(StateFilter(None), F.text)
@@ -805,7 +866,23 @@ async def reminders_loop(bot: Bot, cfg: Config, game: Game) -> None:
                     plan, _ = ui.render_day(ui.today() + timedelta(days=1))
                     text, markup = ui.admin_menu()
                     text = "🌙 <b>Время админа.</b> Настрой завтрашний день.\n\n" + plan
+                    if game.life.rating(ui.today()) is None:
+                        text += "\n\n⭐ И оцени сегодняшний день (1–10):"
+                        markup = kb(*markup.inline_keyboard, *PlanUI.rating_rows(0))
                 await bot.send_message(cfg.owner_id, text, reply_markup=markup)
+            # ⏰ «пора садиться за квесты» — один раз в день
+            if game.get_setting("remind_startby", "1") == "1" and game.get_setting("sent_startby") != today_str:
+                sb = game.planner.start_by(ui.today(), now)
+                if sb and sb["remaining_min"] and sb["late"]:
+                    game.set_setting("sent_startby", today_str)
+                    text, markup = ui.render_day(ui.today(), "⏰ <b>Пора садиться за квесты</b>")
+                    await bot.send_message(cfg.owner_id, text, reply_markup=markup)
+            # 🏆 итоги сезона — в первый день месяца после 10:00
+            prev = (now.date().replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
+            if now.day == 1 and now.hour >= 10 and game.get_setting("season_sent") != prev:
+                game.set_setting("season_sent", prev)
+                if game.life.period(*month_bounds(prev))["active_days"]:
+                    await bot.send_message(cfg.owner_id, PlanUI(ui).season_card(prev))
             # умный чек-ин
             if game.checkin_due(now.hour):
                 game.checkin_sent()
@@ -830,6 +907,7 @@ COMMANDS = [
     BotCommand(command="shop", description="Магазин"),
     BotCommand(command="promises", description="Обещания"),
     BotCommand(command="finance", description="Финансы"),
+    BotCommand(command="bank", description="Банк заданий"),
     BotCommand(command="web", description="Войти в веб-приложение"),
     BotCommand(command="help", description="Помощь"),
 ]

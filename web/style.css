@@ -281,3 +281,67 @@ details.card[open] > summary { margin-bottom: 12px; }
 .quest.promise.overdue { border-left-color: var(--bad); }
 .quest.promise .q-xp { color: #e58aa0; }
 select.pdue { appearance: none; -webkit-appearance: none; text-align: center; text-align-last: center; padding: 0; font-size: 16px; }
+
+/* ---------- Время дня ---------- */
+.banner { margin: 12px 0 4px; padding: 10px 12px; border-radius: var(--radius); background: var(--surface);
+  border: 1px solid var(--line); border-left: 3px solid var(--ink-2); font-size: 14px; }
+.banner.hot { border-left-color: var(--accent); background: rgba(240,165,58,.08); }
+.banner.bad { border-left-color: var(--bad); background: rgba(224,97,79,.08); }
+.load { margin: 0 0 12px; }
+.load .dayprog-bar { margin-top: 6px; }
+.pace-ask { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: -4px 0 10px 4px; }
+.pace-ask .chip { min-height: 30px; font-size: 13px; }
+
+/* ---------- Привычки ---------- */
+.habits { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 8px; }
+.habit { display: flex; align-items: center; gap: 10px; text-align: left; padding: 10px 12px; border-radius: var(--radius);
+  background: var(--surface); border: 1px solid var(--line); cursor: pointer; min-height: 56px; }
+.habit.on { border-color: var(--good); background: rgba(143,209,138,.07); }
+.habit-emoji { font-size: 22px; }
+.habit-body { flex: 1; min-width: 0; display: flex; flex-direction: column; font-size: 14px; }
+.habit-check { width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--line); display: grid; place-items: center;
+  color: var(--bg); font-weight: 900; font-size: 13px; flex-shrink: 0; }
+.habit.on .habit-check { background: var(--good); border-color: var(--good); }
+
+/* ---------- Оценка дня ---------- */
+.rating { display: grid; grid-template-columns: repeat(10, 1fr); gap: 4px; }
+.rate { min-height: 40px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface-2); color: var(--ink-2);
+  font: 700 15px var(--cond); cursor: pointer; }
+.rate.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+
+/* ---------- Банк ---------- */
+.quest.bank { cursor: pointer; border-left-width: 3px; }
+.quest.bank.heat0 { border-left-color: #3b5368; }
+.quest.bank.heat1 { border-left-color: #8a7a4a; }
+.quest.bank.heat2 { border-left-color: #c9822a; }
+.quest.bank.heat3 { border-left-color: #e0612f; }
+.quest.bank.heat4 { border-left-color: var(--bad); background: rgba(224,97,79,.06); }
+.heat-badge { font-size: 18px; min-width: 34px; text-align: center; }
+.bank-open { margin-top: -4px; border-top-left-radius: 0; border-top-right-radius: 0; }
+.bank-open .sub { padding: 6px 0; border-bottom: 1px solid var(--line); }
+.bank-open .sub.done { opacity: .5; }
+.card.sched { margin-top: -4px; border-color: var(--accent); }
+
+/* ---------- Календарь ---------- */
+.cal-head, .cal { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+.cal-head span { text-align: center; font-size: 11px; color: var(--muted); padding: 4px 0; }
+.cal-cell { position: relative; min-height: 58px; padding: 4px; border-radius: 6px; background: var(--surface); border: 1px solid var(--line);
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px; cursor: pointer; text-align: left; color: var(--ink); }
+.cal-cell.out { visibility: hidden; }
+.cal-cell.today { border-color: var(--accent); }
+.cal-cell.sel { background: var(--surface-2); outline: 2px solid var(--ink-2); }
+.cal-cell.hot { background: rgba(224,97,79,.08); }
+.cal-num { font: 700 13px var(--cond); }
+.cal-icons { font-size: 11px; line-height: 1.1; word-break: break-all; }
+.cal-dots { font-size: 10px; color: var(--muted); margin-top: auto; }
+.cal-rate { position: absolute; top: 4px; right: 5px; font-size: 10px; color: var(--accent); font-weight: 700; }
+
+/* ---------- Сезон ---------- */
+.season-card { margin-top: 8px; padding: 18px; border-radius: 10px; border: 1px solid #4a3a1c;
+  background: linear-gradient(160deg, rgba(240,165,58,.14), transparent 60%), var(--surface); }
+.season-title { font: 900 24px var(--cond); text-transform: uppercase; letter-spacing: .03em; color: var(--accent); }
+.season-xp { font: 900 52px/1 var(--cond); margin: 12px 0 14px; }
+.season-xp span { font-size: 18px; color: var(--muted); }
+.season-row { display: flex; gap: 10px; align-items: center; padding: 7px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+.season-row:last-of-type { border-bottom: 0; }
+.season-ach { margin-top: 12px; font-size: 24px; letter-spacing: 4px; }

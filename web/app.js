@@ -201,9 +201,13 @@ function catOf(key) { return state.meta.categories.find(c => c.key === key); }
 function questCard(q, mode) {
   const c = catOf(q.category);
   let actionsHtml = "";
+  const isToday = q.day === state.meta.today;
   if (mode === "player") {
+    const timerBtn = isToday && c.pickable
+      ? `<button class="btn btn-icon btn-sm ${q.timer_running ? "btn-accent" : ""}" data-act="timer" data-id="${q.id}" data-a="${q.timer_running ? "pause" : "start"}" aria-label="${q.timer_running ? "Пауза" : "Таймер"}">${q.timer_running ? "⏸" : "⏱"}</button>` : "";
     actionsHtml = q.status === "todo"
       ? `<button class="btn btn-icon btn-good" data-act="mark" data-id="${q.id}" data-s="done" aria-label="Выполнено">✓</button>
+         ${timerBtn}
          <button class="btn btn-icon btn-bad" data-act="mark" data-id="${q.id}" data-s="failed" aria-label="Провалено">✕</button>`
       : `<button class="btn btn-icon" data-act="mark" data-id="${q.id}" data-s="todo" aria-label="Отменить">↩</button>`;
   } else if (mode === "admin") {
@@ -212,15 +216,26 @@ function questCard(q, mode) {
   let html = `<div class="quest ${q.is_main ? "main" : ""} ${q.status}">
     <div class="q-body">
       <div class="q-title">${esc(q.title)}</div>
-      <div class="q-meta"><span class="tag">${c.emoji} ${esc(c.title)}</span></div>
+      <div class="q-meta"><span class="tag">${c.emoji} ${esc(c.title)}</span>
+        ${q.bank_id ? `<span class="tag">🗃</span>` : ""}
+        ${q.est_min && q.status === "todo" ? `<span class="tag">~${fmtMin(q.est_min)}</span>` : ""}
+        ${timerHtml(q)}
+        ${q.pace ? `<span class="tag">${{ fast: "⚡", ok: "👌", slow: "🐢" }[q.pace]}</span>` : ""}</div>
     </div>
     <div class="q-xp">${fmt(q.xp)} XP</div>
     ${actionsHtml ? `<div class="q-actions">${actionsHtml}</div>` : ""}
   </div>`;
+  if (mode === "player" && isToday && q.status === "done" && q.est_min && !q.pace && q.timer_sec < 60 && c.pickable) {
+    html += `<div class="pace-ask small"><span class="muted">По времени как вышло?</span>
+      <button class="chip" data-act="pace" data-id="${q.id}" data-p="fast">⚡ быстрее</button>
+      <button class="chip" data-act="pace" data-id="${q.id}" data-p="ok">👌 как думал</button>
+      <button class="chip" data-act="pace" data-id="${q.id}" data-p="slow">🐢 дольше</button></div>`;
+  }
   if (mode === "admin" && state.editing === q.id) {
     html += `<form class="card" data-submit="saveEdit" data-id="${q.id}">
       <label class="field"><span>Название</span><input class="input" name="title" value="${esc(q.title)}" maxlength="200" required></label>
-      <label class="field"><span>XP</span><input class="input" name="xp" type="number" min="0" inputmode="numeric" value="${q.xp}" required></label>
+      <div class="row"><label class="field" style="flex:1"><span>XP</span><input class="input" name="xp" type="number" min="0" inputmode="numeric" value="${q.xp}" required></label>
+        <label class="field" style="flex:1"><span>Время, мин</span><input class="input" name="est" type="number" min="0" max="1440" inputmode="numeric" value="${q.est_min || ""}" placeholder="—"></label></div>
       <div class="row wrap">
         <button class="btn btn-accent" type="submit">Сохранить</button>
         ${q.status !== "done" ? `<button class="btn" data-act="move" data-id="${q.id}" type="button">→ на день позже</button>` : ""}
@@ -238,9 +253,11 @@ function questCard(q, mode) {
 async function renderToday() {
   const day = state.playerDay || state.meta.today;
   const isToday = !state.playerDay || state.playerDay === state.meta.today;
-  const [d, , prom] = await Promise.all([api("GET", "/day/" + day), loadHud(), isToday ? api("GET", "/promises") : null]);
+  const [d, , prom, plan, habits, rating] = await Promise.all([api("GET", "/day/" + day), loadHud(),
+    isToday ? api("GET", "/promises") : null, isToday ? api("GET", "/plan/day/" + day) : null,
+    isToday ? api("GET", "/habits") : null, api("GET", "/rating/" + day)]);
   state.meta.today = d.today;
-  const qs = d.quests;
+  const qs = d.quests.filter(q => q.category !== "habit");
   const canPlay = day <= d.today;
   const planned = qs.reduce((s, q) => s + q.xp, 0);
   const got = d.stats.xp_on_day;
@@ -256,6 +273,7 @@ async function renderToday() {
         <button class="btn btn-icon" data-act="pday" data-n="1" aria-label="Следующий день" ${day > d.today ? "disabled" : ""}>›</button>
       </div>
     </div>`;
+  if (plan) html += startByHtml(plan.start_by);
 
   if (qs.length) {
     html += `<div class="dayprog">
@@ -278,8 +296,10 @@ async function renderToday() {
       html += `<div class="card center" style="margin-top:14px;border-color:var(--good)"><b>✓ День засчитан в серию.</b> <span class="muted">Бонусы — сверху.</span></div>`;
     }
   }
+  if (habits) html += habitsHtml(habits);
   if (prom) html += promisesBlock(prom, keptToday);
   else if (keptToday.length) html += `<div class="h2">💌 Сдержано</div>` + keptToday.map(q => questCard(q, canPlay ? "player" : "view")).join("");
+  if (canPlay && (parseDay(d.today) - parseDay(day)) / 86400000 <= 1) html += ratingHtml(day, rating.score);
   view.innerHTML = html;
 }
 
@@ -366,9 +386,10 @@ actions.toAdmin = el => { state.adminDay = el.dataset.day; return go("admin"); }
 async function renderAdmin() {
   const t = state.meta.today;
   if (!state.adminDay || state.adminDay < t) state.adminDay = addDays(t, 1);
+  if (state.adminTab === "bank") { await loadHud(); return renderBank(); }
   const day = state.adminDay;
-  const [d, tpls] = await Promise.all([api("GET", "/day/" + day), api("GET", "/templates"), loadHud()]);
-  const qs = d.quests;
+  const [d, tpls, pl] = await Promise.all([api("GET", "/day/" + day), api("GET", "/templates"), api("GET", "/plan/day/" + day), loadHud()]);
+  const qs = d.quests.filter(q => q.category !== "habit");
   const mains = qs.filter(q => q.is_main).length;
   const f = state.form;
   const cat = catOf(f.cat);
@@ -376,7 +397,7 @@ async function renderAdmin() {
 
   const dayChip = (iso, label) => `<button class="chip ${day === iso ? "on" : ""}" data-act="aday" data-day="${iso}">${label}</button>`;
 
-  let html = `<div class="h1">Режим админа</div>
+  let html = adminTabs() + `
     <p class="muted small" style="margin:4px 0 12px">Вечером настраиваешь игру — утром играешь.</p>
     <div class="chips">
       ${dayChip(t, "Сегодня")}${dayChip(addDays(t, 1), "Завтра")}${dayChip(addDays(t, 2), WD_SHORT[parseDay(addDays(t, 2)).getDay()] + " " + ddmm(addDays(t, 2)))}
@@ -388,7 +409,8 @@ async function renderAdmin() {
       <span>Основных <b style="color:${mains ? "var(--ink)" : "var(--bad)"}">${mains}/${state.meta.max_main}</b></span>
       <span class="muted">·</span><span>${qs.length} ${plural(qs.length, "квест", "квеста", "квестов")}</span>
       <span class="muted">·</span><span><b>${fmt(qs.reduce((s, q) => s + q.xp, 0))}</b> XP</span>
-    </div>
+    </div>${loadHtml(pl.load)}
+    <button class="btn btn-sm" data-act="adminTab" data-t="bank" style="margin-bottom:10px">🗃 Взять из банка</button>
     ${qs.length ? qs.map(q => questCard(q, "admin")).join("") : `<div class="empty">Пусто. Добавь 1–3 основных квеста и бонусы.</div>`}
 
     <div class="h2">Шаблоны <span class="spacer"></span></div>
@@ -416,6 +438,9 @@ async function renderAdmin() {
         </div>
         <div id="xp-hint" class="small" style="margin-top:4px">${xpHint(cat, f.xp)}</div>
       </label>
+      <label class="field"><span>Примерно времени</span></label>
+      <div class="chips" style="margin:-6px 0 14px">${[0, ...TIME_PRESETS.slice(0, 7)].map(m =>
+        `<button type="button" class="chip ${(f.est || 0) === m ? "on" : ""}" data-act="fest" data-m="${m}">${m ? fmtMin(m) : "не знаю"}</button>`).join("")}</div>
       <label class="field"><span>Название</span>
         <input class="input" name="title" maxlength="200" placeholder="Например: Лаба по криптографии" value="${esc(f.title)}" data-input="ftitle" required></label>
       <label class="row small" style="margin-bottom:12px"><input type="checkbox" data-input="ftpl" ${f.saveTpl ? "checked" : ""}> сохранить в шаблоны</label>
@@ -450,19 +475,20 @@ function syncXp(v) {
 actions.fxpRange = el => syncXp(el.value);
 actions.fxpNum = el => syncXp(el.value);
 actions.ftitle = el => { state.form.title = el.value; };
+actions.fest = el => { state.form.est = Number(el.dataset.m); return renderAdmin(); };
 actions.ftpl = el => { state.form.saveTpl = el.checked; };
 
 actions.addQuest = async () => {
   const f = state.form;
-  const res = await api("POST", "/quests", { day: state.adminDay, category: f.cat, title: f.title, xp: f.xp });
-  if (f.saveTpl) await api("POST", "/templates", { category: f.cat, title: f.title, xp: f.xp });
+  const res = await api("POST", "/quests", { day: state.adminDay, category: f.cat, title: f.title, xp: f.xp, est_min: f.est || null });
+  if (f.saveTpl) await api("POST", "/templates", { category: f.cat, title: f.title, xp: f.xp, est_min: f.est || null });
   toast(`➕ ${esc(res.quest.title)}${res.warning ? " · ⚠️ XP " + esc(res.warning) : ""}`);
   f.title = "";
   await renderAdmin();
 };
 actions.edit = el => { const id = Number(el.dataset.id); state.editing = state.editing === id ? null : id; return renderAdmin(); };
 actions.saveEdit = async form => {
-  await api("PATCH", "/quests/" + form.dataset.id, { title: form.title.value, xp: Number(form.xp.value) });
+  await api("PATCH", "/quests/" + form.dataset.id, { title: form.title.value, xp: Number(form.xp.value), est_min: Number(form.est.value) || null });
   state.editing = null;
   toast("Сохранено");
   await renderAdmin();
@@ -482,7 +508,7 @@ actions.del = async el => {
 };
 actions.toTpl = async el => {
   const q = (await api("GET", "/day/" + state.adminDay)).quests.find(x => x.id === Number(el.dataset.id));
-  await api("POST", "/templates", { category: q.category, title: q.title, xp: q.xp });
+  await api("POST", "/templates", { category: q.category, title: q.title, xp: q.xp, est_min: q.est_min });
   toast("💾 Сохранено в шаблоны");
   await renderAdmin();
 };
@@ -546,12 +572,13 @@ const HEAT = ["var(--surface-2)", "#4a3413", "#7d5515", "#b8791c", "#f0a53a"];
 function heatLevel(xp) { return xp <= 0 ? 0 : xp < 200 ? 1 : xp < 500 ? 2 : xp < 900 ? 3 : 4; }
 
 async function renderStats() {
+  if (state.statsTab && state.statsTab !== "main") { await loadHud(); return STATS[state.statsTab](); }
   const s = await loadHud();
   const lv = s.level;
   const hist = s.history;
   const rate = s.completion_30 == null ? "—" : s.completion_30 + "%";
 
-  let html = `<div class="h1">Статистика</div>
+  let html = `<div class="h1">Статистика</div>` + statsTabs() + `
     <div class="tiles" style="margin-top:12px">
       <div class="tile"><div class="stat-label">Уровень</div><div class="stat-value" style="color:var(--accent)">${lv.level}</div><div class="stat-sub">${fmt(lv.into)} / ${fmt(lv.need)} XP</div></div>
       <div class="tile"><div class="stat-label">Серия</div><div class="stat-value">🔥 ${s.streak}</div><div class="stat-sub">рекорд ${s.best_streak} ${plural(s.best_streak, "день", "дня", "дней")}</div></div>
@@ -733,9 +760,21 @@ actions.refund = async el => {
 // ================= Экран: Настройки =================
 
 async function renderSettings() {
-  const [st] = await Promise.all([api("GET", "/settings"), loadHud()]);
+  const [st, , habitsBlock] = await Promise.all([api("GET", "/settings"), loadHud(), habitsSettingsHtml()]);
   const m = state.meta;
   view.innerHTML = `<div class="h1">Настройки</div>
+
+    <div class="h2">⏰ Время</div>
+    <form class="card" data-submit="saveSettings">
+      <div class="row">
+        <label class="field" style="flex:1"><span>Отбой</span><input class="input" type="time" name="bedtime" value="${esc(st.bedtime)}"></label>
+        <label class="field" style="flex:1"><span>Часов на дела в день</span><input class="input" type="number" name="capacity" min="1" max="16" step="0.5" value="${st.capacity_h}"></label>
+      </div>
+      <p class="muted small" style="margin-top:0">По отбою считается «начни не позже», по часам на дела — перегруз дня в админке.</p>
+      <label class="row small" style="margin-bottom:12px"><input type="checkbox" name="startby" ${st.remind_startby ? "checked" : ""}> напомнить в боте, когда пора садиться</label>
+      <button class="btn btn-accent wide" type="submit">Сохранить</button>
+    </form>
+    ${habitsBlock}
 
     <div class="h2">Напоминания в Telegram</div>
     <form class="card" data-submit="saveSettings">
@@ -775,11 +814,22 @@ async function renderSettings() {
 }
 
 actions.saveSettings = async form => {
-  await api("PUT", "/settings", {
-    remind_morning: form.morning.value, remind_evening: form.evening.value, remind_promises: form.promises.value,
-    checkin_on: form.ci_on.checked, checkin_every: Number(form.ci_every.value),
-    checkin_from: Number(form.ci_from.value), checkin_to: Number(form.ci_to.value),
+  // форм несколько — берём текущие настройки и меняем только поля этой формы
+  const cur = await api("GET", "/settings");
+  const body = {
+    remind_morning: cur.remind_morning, remind_evening: cur.remind_evening, remind_promises: cur.remind_promises,
+    checkin_on: cur.checkin_on, checkin_every: cur.checkin_every, checkin_from: cur.checkin_from, checkin_to: cur.checkin_to,
+    bedtime: cur.bedtime, capacity_h: cur.capacity_h, remind_startby: cur.remind_startby,
+  };
+  const f = form.elements;
+  if (f.morning) Object.assign(body, {
+    remind_morning: f.morning.value, remind_evening: f.evening.value, remind_promises: f.promises.value,
+    checkin_on: f.ci_on.checked, checkin_every: Number(f.ci_every.value),
+    checkin_from: Number(f.ci_from.value), checkin_to: Number(f.ci_to.value),
   });
+  if (f.bedtime) Object.assign(body, { bedtime: f.bedtime.value || "00:00", capacity_h: Number(f.capacity.value) || 6,
+                                       remind_startby: f.startby.checked });
+  await api("PUT", "/settings", body);
   toast("Сохранено");
 };
 actions.logout = async () => {

@@ -25,6 +25,11 @@ class Quest:
     title: str
     xp: int
     status: str
+    est_min: int | None = None
+    bank_id: int | None = None
+    timer_start: str | None = None
+    timer_sec: int = 0
+    pace: str | None = None
 
     @property
     def is_main(self) -> bool:
@@ -37,7 +42,16 @@ class Quest:
     def to_dict(self) -> dict:
         return {"id": self.id, "day": self.day, "category": self.category.key,
                 "title": self.title, "xp": self.xp, "status": self.status,
-                "is_main": self.is_main}
+                "is_main": self.is_main, "est_min": self.est_min, "bank_id": self.bank_id,
+                "timer_running": self.timer_start is not None, "timer_sec": self.elapsed(),
+                "pace": self.pace}
+
+    def elapsed(self) -> int:
+        """Секунды на таймере (с учётом идущего прямо сейчас)."""
+        sec = self.timer_sec or 0
+        if self.timer_start:
+            sec += max(0, int((datetime.now() - datetime.fromisoformat(self.timer_start)).total_seconds()))
+        return sec
 
 
 @dataclass
@@ -59,9 +73,13 @@ def game_day(now: datetime, day_start_hour: int) -> date:
 
 
 def _row_to_quest(row: sqlite3.Row) -> Quest:
+    keys = row.keys()
+    get = lambda k, d=None: row[k] if k in keys else d
     return Quest(
         id=row["id"], day=row["day"], category=rules.CATEGORIES[row["category"]],
         title=row["title"], xp=row["xp"], status=row["status"],
+        est_min=get("est_min"), bank_id=get("bank_id"), timer_start=get("timer_start"),
+        timer_sec=get("timer_sec", 0) or 0, pace=get("pace"),
     )
 
 
@@ -115,6 +133,21 @@ ACHIEVEMENTS = [
     ("bookkeeper", "🧾", "Бухгалтер", "Запиши 30 трат", False),
     ("inlimit7", "🛡", "В рамках", "7 дней подряд траты в дневном лимите", False),
     ("dream", "🌠", "Мечта сбылась", "Исполни желание из карты желаний", False),
+    # --- банк заданий и время ---
+    ("boss", "💀", "Победил босса", "Выполни задачу сложности «Босс»", False),
+    ("early5", "⏳", "Заранее", "5 задач из банка закрыто за 3+ дня до дедлайна", False),
+    ("firefighter", "🧯", "Пожарный", "Закрой задачу в день дедлайна", False),
+    ("splitter", "🔪", "Разделяй и властвуй", "Разбей задачу на 5 частей", False),
+    ("bank_empty", "📦", "Склад пуст", "Ни одной задачи в банке (и хотя бы 10 закрытых)", False),
+    ("archivist", "🗄", "Архивариус", "50 задач из банка выполнено", False),
+    ("fast5", "⚡", "Шустрый", "5 раз быстрее, чем оценил", False),
+    ("slow5", "🛠", "На совесть", "5 раз дольше, чем оценил, — но довёл до конца", False),
+    ("sniper", "🎯", "Снайпер", "5 раз ровно в свою оценку времени", False),
+    # --- ритм ---
+    ("habit7", "🔁", "Привычка", "Серия 7 дней (или 4 недели) по привычке", False),
+    ("habit30", "🧱", "Железная воля", "Серия 30 дней (или 12 недель) по привычке", False),
+    ("reflect14", "⭐", "Рефлексия", "Оцени 14 дней", False),
+    ("season1", "🏆", "Первый сезон", "Отыграй целый месяц (20+ активных дней)", False),
     # --- секретные ---
     ("night", "🌃", "Ночная смена", "Выполнил квест между 2 и 5 часами ночи", True),
     ("early", "🐓", "Ранняя пташка", "Выполнил квест до 7 утра", True),
@@ -128,6 +161,8 @@ ACHIEVEMENTS = [
     ("newyear", "🎄", "С Новым годом!", "Выполнил квест 1 января", True),
     ("knight", "🌹", "Рыцарь", "Сдержал 50 обещаний", True),
     ("payday", "💰", "Зарплатный день", "Получил оплату сразу за 5 смен", True),
+    ("longhaul", "🦥", "Долгострой", "Закрыл задачу, которая пролежала в банке 30+ дней", True),
+    ("deep", "🧘", "Глубокое погружение", "3 часа на таймере за один квест", True),
 ]
 
 
@@ -136,6 +171,10 @@ class Game:
         self.conn = conn
         self.tz = tz   # время выполнения квестов пишется по этому поясу (Москва)
         self.fin = Finance(conn, self)
+        from .planner import Planner
+        from .life import Life
+        self.planner = Planner(self)
+        self.life = Life(self)
         # для умных чек-инов (в памяти; после перезапуска считаем, что ты только что был активен)
         self.last_activity = time.time()
         self.last_checkin = 0.0
@@ -167,19 +206,22 @@ class Game:
         if len(title) > 200:
             raise GameError("Слишком длинное название")
 
-    def add_quest(self, day: date, category: rules.Category, title: str, xp: int) -> tuple[Quest, str | None]:
+    def add_quest(self, day: date, category: rules.Category, title: str, xp: int,
+                  est_min: int | None = None, bank_id: int | None = None) -> tuple[Quest, str | None]:
         """Добавляет квест. Возвращает (квест, предупреждение про XP или None)."""
         self._check_fields(title, xp)
+        if est_min is not None and not (0 < est_min <= 24 * 60):
+            raise GameError("Время — от 1 минуты до 24 часов")
         self._check_main_limit(day, category)
         cur = self.conn.execute(
-            "INSERT INTO quests (day, category, title, xp) VALUES (?, ?, ?, ?)",
-            (day.isoformat(), category.key, title.strip(), xp),
+            "INSERT INTO quests (day, category, title, xp, est_min, bank_id) VALUES (?, ?, ?, ?, ?, ?)",
+            (day.isoformat(), category.key, title.strip(), xp, est_min, bank_id),
         )
         self.conn.commit()
         return self.get(cur.lastrowid), rules.xp_warning(category, xp)
 
     def edit_quest(self, quest_id: int, title: str | None = None, xp: int | None = None,
-                   day: date | None = None) -> Quest:
+                   day: date | None = None, est_min: int | None = None) -> Quest:
         """Меняет название, XP или переносит квест на другой день."""
         q = self.get(quest_id)
         new_title = q.title if title is None else title
@@ -191,9 +233,10 @@ class Game:
                 raise GameError("Выполненный квест нельзя перенести")
             self._check_main_limit(day, q.category)
             new_day = day.isoformat()
-        self.conn.execute("UPDATE quests SET title = ?, xp = ?, day = ?, status = ? WHERE id = ?",
+        self.conn.execute("UPDATE quests SET title = ?, xp = ?, day = ?, status = ?, est_min = ? WHERE id = ?",
                           (new_title.strip(), new_xp, new_day,
-                           "todo" if new_day != q.day else q.status, quest_id))
+                           "todo" if new_day != q.day else q.status,
+                           est_min if est_min is not None else q.est_min, quest_id))
         self.conn.commit()
         return self.get(quest_id)
 
@@ -201,6 +244,8 @@ class Game:
         q = self.get(quest_id)
         if q.status == "done":
             raise GameError("Выполненный квест удалить нельзя — сначала отмени выполнение")
+        if q.category.key in ("habit", "promise"):
+            raise GameError("Этот квест управляется своим разделом")
         self.conn.execute("DELETE FROM quests WHERE id = ?", (quest_id,))
         self.conn.commit()
         return q
@@ -215,6 +260,9 @@ class Game:
         done_at = now if status in ("done", "failed") else None
         if old.status == "done" and status == "todo":
             self.set_setting("undo_count", str(int(self.get_setting("undo_count", "0")) + 1))
+        if status != "todo" and old.timer_start:      # закрыл квест — таймер останавливается
+            self.conn.execute("UPDATE quests SET timer_sec = ?, timer_start = NULL WHERE id = ?",
+                              (old.elapsed(), quest_id))
         self.conn.execute("UPDATE quests SET status = ?, done_at = ? WHERE id = ?",
                           (status, done_at, quest_id))
         self.conn.commit()
@@ -235,7 +283,10 @@ class Game:
             q0.status = "todo"
             return {"quest": q0, "level_before": lvl_before, "level_after": self.stats().level.level,
                     "new_achievements": []}
+        if q0.category.key == "habit" and status != "done":
+            raise GameError("Привычку отмечай в блоке «Привычки»")
         q, lvl_before, lvl_after = self.set_status(quest_id, status)
+        self.planner.after_mark(q, today)        # банк заданий и темп
         new = [a for a in self.full_stats(today)["achievements"]
                if a["done"] and a["key"] not in before]
         return {"quest": q, "level_before": lvl_before, "level_after": lvl_after,
@@ -263,10 +314,10 @@ class Game:
         rows = self.conn.execute("SELECT * FROM templates ORDER BY category, title").fetchall()
         return [dict(r) for r in rows]
 
-    def add_template(self, category: rules.Category, title: str, xp: int) -> dict:
+    def add_template(self, category: rules.Category, title: str, xp: int, est_min: int | None = None) -> dict:
         self._check_fields(title, xp)
-        cur = self.conn.execute("INSERT INTO templates (category, title, xp) VALUES (?, ?, ?)",
-                                (category.key, title.strip(), xp))
+        cur = self.conn.execute("INSERT INTO templates (category, title, xp, est_min) VALUES (?, ?, ?, ?)",
+                                (category.key, title.strip(), xp, est_min))
         self.conn.commit()
         return self.template(cur.lastrowid)
 
@@ -283,7 +334,7 @@ class Game:
 
     def add_from_template(self, day: date, template_id: int) -> tuple[Quest, str | None]:
         t = self.template(template_id)
-        return self.add_quest(day, rules.CATEGORIES[t["category"]], t["title"], t["xp"])
+        return self.add_quest(day, rules.CATEGORIES[t["category"]], t["title"], t["xp"], t.get("est_min"))
 
     # ================= Магазин =================
 
@@ -596,6 +647,9 @@ class Game:
         n_templates = self.conn.execute("SELECT COUNT(*) FROM templates").fetchone()[0]
         ps = self.promise_stats(today)
         fc = self.fin.counts()
+        bc = self.planner.counts()
+        pc = self.planner.pace_counts()
+        hd, hw = self.life.best_habit_streaks(today)
 
         # 10 подряд без провала
         run = best_run = 0
@@ -662,6 +716,14 @@ class Game:
             "shift1": fc["shifts"] >= 1, "bookkeeper": fc["tx_out"] >= 30,
             "inlimit7": self.fin.limit_streak(today) >= 7, "dream": fc["wishes_done"] >= 1,
             "payday": fc["max_payout_shifts"] >= 5,
+            "boss": bc["boss"] >= 1, "early5": bc["early"] >= 5, "firefighter": bc["fire"] >= 1,
+            "splitter": bc["split"] >= 5, "bank_empty": bc["open"] == 0 and bc["done"] >= 10,
+            "archivist": bc["done"] >= 50,
+            "fast5": pc.get("fast", 0) >= 5, "slow5": pc.get("slow", 0) >= 5, "sniper": pc.get("ok", 0) >= 5,
+            "habit7": hd >= 7 or hw >= 4, "habit30": hd >= 30 or hw >= 12,
+            "reflect14": self.conn.execute("SELECT COUNT(*) FROM day_rating").fetchone()[0] >= 14,
+            "season1": self.life.seasons_played(today) >= 1,
+            "longhaul": bc["longhaul"] >= 1, "deep": bc["deep"] >= 1,
         }
 
         # Открытое достижение остаётся открытым навсегда

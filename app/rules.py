@@ -26,6 +26,8 @@ CATEGORIES: dict[str, Category] = {
     "bonus": Category("bonus", "Бонус", "⭐", 10, 200, False),
     # квесты этой категории создаются сами, когда сдерживаешь обещание
     "promise": Category("promise", "Обещание", "💌", 30, 150, False, pickable=False),
+    # отметка привычки
+    "habit": Category("habit", "Привычка", "🔁", 10, 50, False, pickable=False),
 }
 
 # Слова, которыми можно назвать категорию в команде боту
@@ -39,6 +41,14 @@ ALIASES: dict[str, str] = {
 }
 
 MAX_MAIN_PER_DAY = 3
+
+# Банк заданий
+DIFFICULTY = {1: ("Лёгкая", "🟢", 0.6), 2: ("Средняя", "🟡", 1.0), 3: ("Сложная", "🟠", 1.5), 4: ("Босс", "💀", 2.2)}
+EARLY_DAYS = 3             # сделал за столько дней до дедлайна —
+EARLY_BONUS = 0.2          # …+20% XP
+HEAT = ["❄️", "🌤", "🔥", "🔥🔥", "🔥🔥🔥"]
+HEAT_NAMES = ["спокойно", "пора задуматься", "горит", "очень горит", "пожар"]
+TIME_PRESETS = [15, 30, 60, 90, 120, 180, 300, 480]   # минуты
 
 # Обещания
 PROMISE_XP = 50            # за сдержанное обещание
@@ -97,3 +107,17 @@ def coins_earned(total_xp: int) -> int:
 def progress_bar(into: int, need: int, width: int = 10) -> str:
     filled = round(width * into / need) if need else width
     return "▰" * filled + "▱" * (width - filled)
+
+
+def fmt_min(m: int | None) -> str:
+    """90 → «1ч 30м», 45 → «45м»."""
+    if not m:
+        return "—"
+    h, mm = divmod(int(m), 60)
+    return f"{h}ч {mm}м" if h and mm else f"{h}ч" if h else f"{mm}м"
+
+
+def suggest_xp(category: "Category", difficulty: int) -> int:
+    """Подсказка цены при переносе из банка: середина диапазона категории × сложность."""
+    mid = (category.xp_min + category.xp_max) / 2
+    return max(10, int(round(mid * DIFFICULTY.get(difficulty, DIFFICULTY[2])[2] / 10) * 10))

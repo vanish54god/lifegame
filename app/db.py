@@ -65,6 +65,43 @@ CREATE TABLE IF NOT EXISTS promises (
     last_nudge  TEXT                           -- когда бот последний раз спрашивал «когда?»
 );
 
+-- Банк заданий: все дела, пока они не сделаны
+CREATE TABLE IF NOT EXISTS bank_tasks (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    title       TEXT    NOT NULL,
+    category    TEXT    NOT NULL,
+    difficulty  INTEGER NOT NULL DEFAULT 2,   -- 1 лёгкая, 2 средняя, 3 сложная, 4 босс
+    est_min     INTEGER,                      -- примерное время, минуты
+    deadline    TEXT,
+    parent_id   INTEGER,                      -- часть большой задачи
+    status      TEXT    NOT NULL DEFAULT 'open',   -- open / done
+    created_day TEXT    NOT NULL,
+    done_day    TEXT
+);
+
+-- Привычки (каждый день или N раз в неделю)
+CREATE TABLE IF NOT EXISTS habits (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    title       TEXT    NOT NULL,
+    emoji       TEXT    NOT NULL DEFAULT '🔁',
+    per_week    INTEGER NOT NULL DEFAULT 7,   -- 7 = каждый день
+    xp          INTEGER NOT NULL DEFAULT 20,
+    archived    INTEGER NOT NULL DEFAULT 0,
+    created_day TEXT    NOT NULL
+);
+CREATE TABLE IF NOT EXISTS habit_log (
+    habit_id INTEGER NOT NULL,
+    day      TEXT    NOT NULL,
+    quest_id INTEGER,
+    PRIMARY KEY (habit_id, day)
+);
+
+-- Оценка дня 1–10
+CREATE TABLE IF NOT EXISTS day_rating (
+    day   TEXT PRIMARY KEY,
+    score INTEGER NOT NULL
+);
+
 -- Открытые достижения (навсегда, даже если потом что-то отменил)
 CREATE TABLE IF NOT EXISTS achievements (
     key         TEXT PRIMARY KEY,
@@ -93,6 +130,14 @@ def _migrate(conn: sqlite3.Connection) -> None:
     # Этап 1 → этап 2+: у покупок появилась ссылка на товар
     if "item_id" not in _columns(conn, "purchases"):
         conn.execute("ALTER TABLE purchases ADD COLUMN item_id INTEGER")
+    # Банк заданий и таймер: у квестов появились время, связь с банком и таймер
+    qcols = _columns(conn, "quests")
+    for col, typ in [("est_min", "INTEGER"), ("bank_id", "INTEGER"), ("timer_start", "TEXT"),
+                     ("timer_sec", "INTEGER NOT NULL DEFAULT 0"), ("pace", "TEXT")]:
+        if col not in qcols:
+            conn.execute(f"ALTER TABLE quests ADD COLUMN {col} {typ}")
+    if "est_min" not in _columns(conn, "templates"):
+        conn.execute("ALTER TABLE templates ADD COLUMN est_min INTEGER")
     conn.commit()
 
 

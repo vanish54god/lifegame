@@ -20,6 +20,9 @@ from .game import SHOP_KINDS, Game, GameError, game_day
 from .promise_text import parse_promise
 from .finance import FinError
 from .web_finance import add_finance_routes
+from .web_planner import add_planner_routes
+from .planner import PlanError
+from .life import LifeError
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
@@ -35,17 +38,20 @@ class QuestIn(BaseModel):
     category: str
     title: str = Field(max_length=200)
     xp: int
+    est_min: int | None = Field(None, ge=0, le=1440)
 
 class QuestPatch(BaseModel):
     status: str | None = None
     title: str | None = Field(None, max_length=200)
     xp: int | None = None
     day: date | None = None
+    est_min: int | None = Field(None, ge=0, le=1440)
 
 class TemplateIn(BaseModel):
     category: str
     title: str = Field(max_length=200)
     xp: int
+    est_min: int | None = Field(None, ge=0, le=1440)
 
 class FromTemplateIn(BaseModel):
     day: date
@@ -71,6 +77,9 @@ class SettingsIn(BaseModel):
     checkin_every: int = Field(3, ge=1, le=12)
     checkin_from: int = Field(10, ge=0, le=23)
     checkin_to: int = Field(22, ge=1, le=24)
+    bedtime: str = "00:00"
+    capacity_h: float = Field(6, ge=1, le=16)
+    remind_startby: bool = True
 
 class PromiseIn(BaseModel):
     text: str = Field(max_length=300)
@@ -99,7 +108,9 @@ def create_app(cfg: Config, game: Game, auth: Auth) -> FastAPI:
         return JSONResponse({"detail": str(e)}, status_code=400)
 
     @app.exception_handler(FinError)
-    async def fin_error(_: Request, e: FinError):
+    @app.exception_handler(PlanError)
+    @app.exception_handler(LifeError)
+    async def fin_error(_: Request, e: Exception):
         return JSONResponse({"detail": str(e)}, status_code=400)
 
     # Заголовки безопасности для всех ответов
@@ -176,13 +187,13 @@ def create_app(cfg: Config, game: Game, auth: Auth) -> FastAPI:
 
     @app.post("/api/quests", dependencies=[Depends(require_auth)])
     async def add_quest(body: QuestIn):
-        q, warn = game.add_quest(body.day, category(body.category), body.title, body.xp)
+        q, warn = game.add_quest(body.day, category(body.category), body.title, body.xp, body.est_min or None)
         return {"quest": q.to_dict(), "warning": warn}
 
     @app.patch("/api/quests/{qid}", dependencies=[Depends(require_auth)])
     async def patch_quest(qid: int, body: QuestPatch):
-        if body.title is not None or body.xp is not None or body.day is not None:
-            game.edit_quest(qid, body.title, body.xp, body.day)
+        if body.title is not None or body.xp is not None or body.day is not None or body.est_min is not None:
+            game.edit_quest(qid, body.title, body.xp, body.day, body.est_min)
         if body.status is not None:
             res = game.mark(qid, body.status, today())
             return {"quest": res["quest"].to_dict(), "level_before": res["level_before"],
@@ -202,7 +213,7 @@ def create_app(cfg: Config, game: Game, auth: Auth) -> FastAPI:
 
     @app.post("/api/templates", dependencies=[Depends(require_auth)])
     async def add_template(body: TemplateIn):
-        return game.add_template(category(body.category), body.title, body.xp)
+        return game.add_template(category(body.category), body.title, body.xp, body.est_min or None)
 
     @app.delete("/api/templates/{tid}", dependencies=[Depends(require_auth)])
     async def delete_template(tid: int):
@@ -285,6 +296,9 @@ def create_app(cfg: Config, game: Game, auth: Auth) -> FastAPI:
                 "checkin_every": int(float(game.get_setting("checkin_every", "3"))),
                 "checkin_from": int(game.get_setting("checkin_from", "10")),
                 "checkin_to": int(game.get_setting("checkin_to", "22")),
+                "bedtime": game.get_setting("bedtime", "00:00"),
+                "capacity_h": float(game.get_setting("capacity_h", "6")),
+                "remind_startby": game.get_setting("remind_startby", "1") == "1",
                 "sessions": auth.sessions_count(),
                 "day_start_hour": cfg.day_start_hour}
 
@@ -301,9 +315,15 @@ def create_app(cfg: Config, game: Game, auth: Auth) -> FastAPI:
         game.set_setting("checkin_every", str(body.checkin_every))
         game.set_setting("checkin_from", str(body.checkin_from))
         game.set_setting("checkin_to", str(body.checkin_to))
+        if not TIME_RE.match(body.bedtime):
+            raise HTTPException(400, "Отбой — в формате ЧЧ:ММ")
+        game.set_setting("bedtime", body.bedtime)
+        game.set_setting("capacity_h", str(body.capacity_h))
+        game.set_setting("remind_startby", "1" if body.remind_startby else "0")
         return await get_settings()
 
     add_finance_routes(app, game, today, require_auth)
+    add_planner_routes(app, game, today, lambda: datetime.now(cfg.tz), require_auth)
 
     # ================= Само приложение =================
 

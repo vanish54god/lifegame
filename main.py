@@ -19,6 +19,7 @@ async def main() -> None:
     cfg = load_config()
     conn = connect(cfg.db_path)
     game, auth = Game(conn, cfg.tz), Auth(conn)
+    game.day_start_hour = cfg.day_start_hour
 
     bot, dp = make_bot(cfg, game, auth)
     await bot.set_my_commands(COMMANDS)
