@@ -291,6 +291,19 @@ class Finance:
         self.conn.commit()
         return self.tx(tx_id)
 
+    def set_tx_day(self, tx_id: int, day: date, today: date) -> dict:
+        """Перенести операцию на другой день (например, трату, которую записал задним числом)."""
+        t = self.tx(tx_id)
+        if t["source"] != "manual" or t["kind"] not in ("in", "out"):
+            raise FinError("Дату этой операции меняют в её разделе (смены, платежи, копилки)")
+        if day > today:
+            raise FinError("Нельзя записать трату в будущее")
+        if (today - day).days > 366:
+            raise FinError("Слишком давно — больше года назад")
+        self.conn.execute("UPDATE fin_tx SET day = ? WHERE id = ?", (day.isoformat(), tx_id))
+        self.conn.commit()
+        return self.tx(tx_id)
+
     def delete_tx(self, tx_id: int) -> dict:
         t = self.tx(tx_id)
         if t["source"] == "shift":

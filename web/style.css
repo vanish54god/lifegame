@@ -345,3 +345,7 @@ select.pdue { appearance: none; -webkit-appearance: none; text-align: center; te
 .season-row { display: flex; gap: 10px; align-items: center; padding: 7px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
 .season-row:last-of-type { border-bottom: 0; }
 .season-ach { margin-top: 12px; font-size: 24px; letter-spacing: 4px; }
+
+/* дата операции: невидимый календарь поверх кнопки 📅 */
+.tx-date { position: relative; overflow: hidden; }
+.tx-date input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }

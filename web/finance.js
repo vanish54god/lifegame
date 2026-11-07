@@ -36,6 +36,7 @@ function txRow(t) {
   return `<li><span style="font-size:20px">${t.emoji}</span>
     <div class="q-body"><div>${esc(t.note || t.cat_title)}</div><div class="muted small">${ddmm(t.day)} · ${esc(t.cat_title)}${t.in_limit ? "" : t.kind === "out" ? " · вне лимита" : ""}</div></div>
     <b style="color:${color};white-space:nowrap">${sign}${rub(t.amount)}</b>
+    ${t.kind !== "move" && t.source === "manual" ? `<label class="btn btn-sm btn-ghost tx-date" aria-label="Изменить дату">📅<input type="date" data-input="txDay" data-id="${t.id}" value="${t.day}" max="${state.meta.today}"></label>` : ""}
     ${t.kind !== "move" ? `<button class="btn btn-sm btn-ghost" data-act="txDel" data-id="${t.id}" aria-label="Удалить">✕</button>` : ""}</li>`;
 }
 
@@ -49,6 +50,9 @@ FIN.home = async () => {
       <div class="muted small">месяц: <span style="color:var(--money)">${rub(o.month_in, true)}</span> / −${rub(o.month_out)}</div></div>
     <form class="row" data-submit="finQuick" style="margin:14px 0">
       <input class="input" name="text" maxlength="100" placeholder="кофе 250 · +5000 монтаж" required>
+      <select class="input" name="day" style="width:auto;flex:none" aria-label="Когда">
+        <option value="">Сегодня</option><option value="${addDays(state.meta.today, -1)}">Вчера</option>
+        <option value="${addDays(state.meta.today, -2)}">Позавчера</option></select>
       <button class="btn btn-accent" type="submit">＋</button></form>
     <div class="tiles">
       <div class="tile"><div class="stat-label">Сегодня</div><div class="stat-value" style="${lim && spent > lim ? "color:var(--bad)" : ""}">${rub(spent)}</div>
@@ -75,9 +79,17 @@ FIN.home = async () => {
   return { html };
 };
 actions.finQuick = async form => {
-  const t = await api("POST", "/fin/quick", { text: form.text.value });
-  toast(`${t.kind === "in" ? "💵 +" : "💸 −"}${rub(t.amount)} · ${t.emoji} ${esc(t.cat_title)}`);
+  const t = await api("POST", "/fin/quick", { text: form.text.value, day: form.day.value || null });
+  toast(`${t.kind === "in" ? "💵 +" : "💸 −"}${rub(t.amount)} · ${t.emoji} ${esc(t.cat_title)}${t.day !== state.meta.today ? " · 📅 " + ddmm(t.day) : ""}`);
   await reFin();
+};
+actions.txDay = async el => {
+  if (!el.value) return;
+  try {
+    const t = await api("PATCH", "/fin/tx/" + el.dataset.id, { day: el.value });
+    toast("📅 Перенесено на " + ddmm(t.day));
+    await reFin();
+  } catch (e) { toastErr(e); }
 };
 actions.txDel = async el => {
   if (!confirm("Удалить операцию?")) return;

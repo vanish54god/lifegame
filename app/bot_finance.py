@@ -34,6 +34,10 @@ class WishAmount(StatesGroup):
     amount = State()
 
 
+class TxDate(StatesGroup):
+    text = State()
+
+
 def kb(*rows) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[r for r in rows if r])
 
@@ -104,12 +108,16 @@ class FinUI:
         sign = "+" if t["kind"] == "in" else "−"
         icon = "💵" if t["kind"] == "in" else "💸"
         note = f" · {escape(t['note'])}" if t["note"] else ""
-        text = f"{icon} <b>{sign}{rub(t['amount'])}</b> · {t['emoji']} {t['cat_title']}{note}"
-        if t["kind"] == "out" and t["in_limit"]:
+        today = self.ui.today()
+        when = "" if t["day"] == today.isoformat() else \
+            " · 📅 вчера" if t["day"] == (today - timedelta(days=1)).isoformat() else f" · 📅 {ddmm(t['day'])}"
+        text = f"{icon} <b>{sign}{rub(t['amount'])}</b> · {t['emoji']} {t['cat_title']}{note}{when}"
+        if t["kind"] == "out" and t["in_limit"] and not when:
             text += "\n" + self.limit_line()
         if t["kind"] == "in":
             text += f"\nСвободно: {rub(self.fin.balance())}"
         return text, kb([Btn(text="🏷 Категория", callback_data=f"fin:cats:{t['id']}"),
+                         Btn(text="📅 Не сегодня" if not when else "📅 Дата", callback_data=f"fin:day:{t['id']}"),
                          Btn(text="🗑 Отменить", callback_data=f"fin:del:{t['id']}")])
 
     def salary(self) -> tuple[str, InlineKeyboardMarkup]:
@@ -253,6 +261,57 @@ def register_finance(router: Router, ui, edit, celebrate, main_kb) -> FinUI:
         await cb.answer(f"{CATS[key].emoji} {CATS[key].title}")
         text, markup = fu.tx_text(t)
         await edit(cb, text, markup)
+
+    @router.callback_query(F.data.startswith("fin:day:"))
+    async def tx_day(cb: CallbackQuery):
+        tid = int(cb.data.split(":")[2])
+        t = ui.today()
+        await cb.answer()
+        await edit(cb, "📅 Когда была трата?", kb(
+            [Btn(text="Сегодня", callback_data=f"fin:setday:{tid}:0"),
+             Btn(text="Вчера", callback_data=f"fin:setday:{tid}:1"),
+             Btn(text=f"Позавчера ({(t - timedelta(days=2)):%d.%m})", callback_data=f"fin:setday:{tid}:2")],
+            [Btn(text=f"{(t - timedelta(days=3)):%d.%m}", callback_data=f"fin:setday:{tid}:3"),
+             Btn(text=f"{(t - timedelta(days=4)):%d.%m}", callback_data=f"fin:setday:{tid}:4"),
+             Btn(text="📅 Другая дата", callback_data=f"fin:dayother:{tid}")]))
+
+    @router.callback_query(F.data.startswith("fin:setday:"))
+    async def tx_setday(cb: CallbackQuery):
+        _, _, tid, n = cb.data.split(":")
+        try:
+            t = fin.set_tx_day(int(tid), ui.today() - timedelta(days=int(n)), ui.today())
+        except FinError as e:
+            return await fin_err(cb, e)
+        await cb.answer(f"📅 {ddmm(t['day'])}")
+        text, markup = fu.tx_text(t)
+        await edit(cb, text, markup)
+
+    @router.callback_query(F.data.startswith("fin:dayother:"))
+    async def tx_dayother(cb: CallbackQuery, state: FSMContext):
+        await state.set_state(TxDate.text)
+        await state.update_data(tid=int(cb.data.split(":")[2]))
+        await cb.answer()
+        await cb.message.answer("Напиши дату траты: <code>03.11</code>")
+
+    @router.message(TxDate.text, F.text)
+    async def tx_day_text(msg: Message, state: FSMContext):
+        m = re.match(r"^\s*(\d{1,2})\.(\d{1,2})(?:\.(\d{2,4}))?\s*$", msg.text)
+        t = ui.today()
+        try:
+            y = int(m.group(3)) if m and m.group(3) else t.year
+            d = date(y + 2000 if y < 100 else y, int(m.group(2)), int(m.group(1)))
+            if d > t and not (m and m.group(3)):
+                d = d.replace(year=d.year - 1)   # «28.12» в январе — это прошлый год
+        except (AttributeError, ValueError):
+            return await msg.answer("Не понял дату. Пример: <code>03.11</code>")
+        data = await state.get_data()
+        await state.clear()
+        try:
+            tx = fin.set_tx_day(data["tid"], d, t)
+        except FinError as e:
+            return await msg.answer(f"⛔ {escape(str(e))}")
+        text, markup = fu.tx_text(tx)
+        await msg.answer(text, reply_markup=markup)
 
     @router.callback_query(F.data.startswith("fin:del:"))
     async def tx_del(cb: CallbackQuery):

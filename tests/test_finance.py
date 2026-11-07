@@ -204,3 +204,37 @@ def test_checkin_logic():
     assert not g.checkin_due(15)                     # только что был активен
     g.set_setting("checkin_on", "0"); g.last_activity -= 5 * 3600
     assert not g.checkin_due(15)
+
+
+def test_backdate_spending(fin):
+    fin.save_settings(daily_limit=100000)
+    t = fin.add_tx(T, "out", 50000, note="кофе")
+    t = fin.set_tx_day(t["id"], T - timedelta(days=1), T)
+    assert t["day"] == "2026-11-04"
+    assert fin.spent_today(T) == 0 and fin.spent_today(T - timedelta(days=1)) == 50000   # лимит пересчитался
+    with pytest.raises(FinError):
+        fin.set_tx_day(t["id"], T + timedelta(days=1), T)          # в будущее нельзя
+    s = fin.add_shift(T, "А", "Хелпер", 100000)
+    paid = fin.pay_shift(s["id"], T)
+    with pytest.raises(FinError):
+        fin.set_tx_day(paid["tx_id"], T - timedelta(days=1), T)    # оплату смены — только через смены
+
+
+def test_api_backdate():
+    from zoneinfo import ZoneInfo
+    from fastapi.testclient import TestClient
+    from app.auth import Auth
+    from app.config import Config
+    from app.web import create_app
+    conn = connect(":memory:")
+    g, a = Game(conn), Auth(conn)
+    c = TestClient(create_app(Config("1:x", 42, ":memory:", 5, ZoneInfo("Europe/Moscow")), g, a))
+    c.headers["Authorization"] = "Bearer " + c.post("/api/login", json={"code": a.new_code()}).json()["token"]
+    today = date.fromisoformat(c.get("/api/meta").json()["today"])
+    y = (today - timedelta(days=1)).isoformat()
+    t = c.post("/api/fin/quick", json={"text": "кофе 250", "day": y}).json()
+    assert t["day"] == y
+    t2 = c.patch(f"/api/fin/tx/{t['id']}", json={"day": (today - timedelta(days=3)).isoformat()}).json()
+    assert t2["day"] == (today - timedelta(days=3)).isoformat() and t2["category"] == "cafe"
+    assert c.patch(f"/api/fin/tx/{t['id']}", json={"day": (today + timedelta(days=1)).isoformat()}).status_code == 400
+    assert c.post("/api/fin/tx", json={"kind": "out", "amount": 100, "day": (today + timedelta(days=2)).isoformat()}).status_code == 400

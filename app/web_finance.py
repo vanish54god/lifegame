@@ -23,9 +23,11 @@ class TxIn(BaseModel):
 
 class QuickIn(BaseModel):
     text: str = Field(max_length=100)
+    day: date | None = None
 
 class TxPatch(BaseModel):
-    category: str
+    category: str | None = None
+    day: date | None = None
 
 class ShiftIn(BaseModel):
     day: date
@@ -96,6 +98,9 @@ def add_finance_routes(app: FastAPI, game, today, require_auth) -> None:
 
     @app.post("/api/fin/tx", dependencies=auth)
     async def add_tx(body: TxIn):
+        if body.day and body.day > today():
+            from .finance import FinError
+            raise FinError("Нельзя записать трату в будущее")
         return fin.add_tx(body.day or today(), body.kind, k(body.amount), body.category, body.note)
 
     @app.post("/api/fin/quick", dependencies=auth)
@@ -105,11 +110,19 @@ def add_finance_routes(app: FastAPI, game, today, require_auth) -> None:
             from .finance import FinError
             raise FinError("Не понял. Примеры: «кофе 250», «+30000 зарплата»")
         kind, amount, note = parsed
-        return fin.add_tx(today(), kind, amount, note=note)
+        t = fin.add_tx(today(), kind, amount, note=note)
+        if body.day and body.day != today():
+            t = fin.set_tx_day(t["id"], body.day, today())
+        return t
 
     @app.patch("/api/fin/tx/{tid}", dependencies=auth)
     async def patch_tx(tid: int, body: TxPatch):
-        return fin.set_tx_category(tid, body.category)
+        t = fin.tx(tid)
+        if body.day is not None:
+            t = fin.set_tx_day(tid, body.day, today())
+        if body.category is not None:
+            t = fin.set_tx_category(tid, body.category)
+        return t
 
     @app.delete("/api/fin/tx/{tid}", dependencies=auth)
     async def del_tx(tid: int):
