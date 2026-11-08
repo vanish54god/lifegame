@@ -26,6 +26,8 @@ from .promise_text import parse_promise
 from .bot_finance import K_FIN, K_MONEY, FinUI, register_finance
 from .bot_planner import K_BANK, PlanUI, register_planner, time_rows
 from .life import month_bounds
+from .backup import make_backup
+from aiogram.types import FSInputFile
 
 # Тексты кнопок постоянной клавиатуры
 K_TODAY, K_ME, K_ADMIN, K_SHOP = "🎮 Сегодня", "👤 Профиль", "🛠 Админ", "🛒 Магазин"
@@ -69,6 +71,7 @@ HELP = """<b>🎮 Как играть</b>
 /item <i>цена название</i> — товар в магазин
 /web — войти в веб-приложение
 /logout_all — выйти из приложения на всех устройствах
+/backup — прислать бэкап базы прямо сейчас
 /rules — категории и границы XP"""
 
 
@@ -513,6 +516,17 @@ def build_router(cfg: Config, game: Game, auth: Auth) -> Router:
     @router.message(Command("web"))
     async def cmd_web(msg: Message):
         await send_login(msg)
+
+    @router.message(Command("backup"))
+    async def cmd_backup(msg: Message):
+        if not cfg.backup_password:
+            return await msg.answer("🔐 Бэкапы выключены: в .env на сервере нет BACKUP_PASSWORD. "
+                                    "Добавь его и перезапусти игру (см. DEPLOY.md).")
+        try:
+            path = make_backup(game.conn, cfg.db_path, cfg.backup_password, datetime.now(cfg.tz))
+        except Exception as e:
+            return await msg.answer(f"⛔ Бэкап не получился: {escape(str(e))}")
+        await msg.answer_document(FSInputFile(path), caption="🔐 Бэкап базы (архив под паролем из .env)")
 
     @router.message(Command("logout_all"))
     async def cmd_logout_all(msg: Message):
@@ -994,6 +1008,12 @@ async def reminders_loop(bot: Bot, cfg: Config, game: Game) -> None:
                 game.set_setting("season_sent", prev)
                 if game.life.period(*month_bounds(prev))["active_days"]:
                     await bot.send_message(cfg.owner_id, PlanUI(ui).season_card(prev))
+            # 🔐 ночной бэкап в 04:30
+            if now.strftime("%H:%M") >= "04:30" and game.get_setting("sent_backup") != today_str and cfg.backup_password:
+                game.set_setting("sent_backup", today_str)
+                path = make_backup(game.conn, cfg.db_path, cfg.backup_password, now)
+                await bot.send_document(cfg.owner_id, FSInputFile(path),
+                                        caption="🔐 Ночной бэкап (архив под паролем из .env)", disable_notification=True)
             # умный чек-ин
             if game.checkin_due(now.hour):
                 game.checkin_sent()

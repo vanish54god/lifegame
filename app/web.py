@@ -127,6 +127,9 @@ def create_app(cfg: Config, game: Game, auth: Auth) -> FastAPI:
         resp.headers["Content-Security-Policy"] = (
             "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
             "script-src 'self'; connect-src 'self'; frame-ancestors 'none'")
+        if not request.url.path.startswith("/api"):
+            # файлы приложения: браузер обязан спросить сервер, не появилась ли новая версия
+            resp.headers.setdefault("Cache-Control", "no-cache")
         if request.url.path.startswith("/api"):
             resp.headers["Cache-Control"] = "no-store"
             # изменения через приложение — тоже активность (чек-ин не нужен)

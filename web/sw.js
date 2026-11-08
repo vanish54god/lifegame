@@ -1,5 +1,5 @@
 /* Service worker: приложение открывается даже без сети (данные — только онлайн). */
-const CACHE = "lifegame-v5";
+const CACHE = "lifegame-v6";
 const SHELL = ["/", "/app.js", "/finance.js", "/planner.js", "/style.css", "/manifest.webmanifest",
                "/icons/icon-192.png", "/icons/apple-touch-icon.png"];
 
@@ -18,7 +18,7 @@ self.addEventListener("fetch", e => {
   if (e.request.method !== "GET" || url.origin !== location.origin || url.pathname.startsWith("/api")) return;
   // Сначала сеть (чтобы обновления приходили сразу), без сети — из кэша
   e.respondWith(
-    fetch(e.request)
+    fetch(e.request, { cache: "no-cache" })
       .then(res => { const copy = res.clone(); caches.open(CACHE).then(c => c.put(e.request, copy)); return res; })
       .catch(() => caches.match(e.request).then(r => r || caches.match("/")))
   );

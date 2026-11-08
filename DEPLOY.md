@@ -57,16 +57,21 @@ docker compose up -d --build
 
 ## Бэкапы
 
-Весь прогресс — один файл `data/game.db`. Ежедневный бэкап через cron:
+Игра делает их сама: каждую ночь в 04:30 бот присылает тебе в Telegram **зашифрованный архив** с базой
+(и хранит 14 последних копий на сервере в `data/backups`). Команда `/backup` — прислать прямо сейчас.
 
-```bash
-mkdir -p /opt/lifegame/backups
-crontab -e
-# добавь строку (каждый день в 4:00, хранит 30 последних копий):
-0 4 * * * cd /opt/lifegame && sqlite3 data/game.db ".backup backups/game-$(date +\%F).db" && ls -t backups/*.db | tail -n +31 | xargs -r rm
+Нужно один раз задать пароль в `/opt/lifegame/.env`:
 ```
+BACKUP_PASSWORD=длинный-пароль-который-ты-сохранил-в-менеджере-паролей
+```
+и перезапустить: `cd /opt/lifegame && docker compose up -d`.
 
-(`apt install -y sqlite3`, если команды нет.) Скачать бэкап на ноут: `scp root@IP:/opt/lifegame/backups/game-ДАТА.db .`
+**Восстановление:** распакуй архив (7-Zip на компе или «Файлы» на iPhone, пароль из .env), получишь `game.db`.
+```bash
+cd /opt/lifegame && docker compose stop app
+cp game.db data/game.db && chown 1000:1000 data/game.db
+docker compose up -d
+```
 
 ## Безопасность (для инфобезника 😄)
 

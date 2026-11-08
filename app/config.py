@@ -17,6 +17,7 @@ class Config:
     public_url: str = "http://localhost:8000"   # адрес веб-приложения (на VPS — https://твой-домен)
     host: str = "0.0.0.0"
     port: int = 8000
+    backup_password: str = ""     # пароль для архивов с бэкапами
 
 
 def _int(name: str, default: str) -> int:
@@ -41,4 +42,5 @@ def load_config() -> Config:
         public_url=os.getenv("PUBLIC_URL", "http://localhost:8000").rstrip("/"),
         host=os.getenv("HOST", "0.0.0.0"),
         port=_int("PORT", "8000"),
+        backup_password=os.getenv("BACKUP_PASSWORD", "").strip(),
     )

@@ -360,3 +360,4 @@ select.pdue { appearance: none; -webkit-appearance: none; text-align: center; te
 .env b { font: 700 14px var(--cond); }
 .card.alloc { margin-top: 10px; border-color: var(--accent); }
 .alloc-parts { display: flex; flex-wrap: wrap; gap: 6px 12px; margin: 8px 0 12px; }
+.banner.money { border-left-color: var(--money); cursor: pointer; }

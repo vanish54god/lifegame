@@ -158,3 +158,36 @@ def test_api_envelopes():
     assert c.put("/api/fin/envelopes/settings", json={"shares": {"me": 50, "rel": 50, "want": 10}}).status_code == 400
     assert c.put("/api/fin/envelopes/settings", json={"shares": {"me": 30, "rel": 50, "want": 20}}).json()["shares"]["rel"] == 50
     assert c.put("/api/settings/show", json={"show_habits": True}).json()["show"]["show_habits"] is True
+
+
+def test_backup_encrypted(tmp_path):
+    import pyzipper
+    from datetime import datetime
+    from app.backup import make_backup
+    db = tmp_path / "game.db"
+    g = Game(connect(db))
+    g.fin.add_tx(T, "in", 100000, note="+")
+    path = make_backup(g.conn, str(db), "секрет123", datetime(2026, 11, 8, 4, 30))
+    assert path.exists() and path.name == "lifegame-2026-11-08_0430.zip"
+    with pyzipper.AESZipFile(path) as z:
+        with pytest.raises(RuntimeError):
+            z.read("game.db")                                  # без пароля не открыть
+        z.setpassword("секрет123".encode())
+        data = z.read("game.db")
+    restored = tmp_path / "restored.db"
+    restored.write_bytes(data)
+    assert Game(connect(restored)).fin.balance() == 100000
+    with pytest.raises(ValueError):
+        make_backup(g.conn, str(db), "", datetime(2026, 11, 8))
+
+
+def test_static_no_cache():
+    from zoneinfo import ZoneInfo
+    from fastapi.testclient import TestClient
+    from app.auth import Auth
+    from app.config import Config
+    from app.web import create_app
+    conn = connect(":memory:")
+    c = TestClient(create_app(Config("1:x", 42, ":memory:", 5, ZoneInfo("Europe/Moscow")), Game(conn), Auth(conn)))
+    assert c.get("/app.js").headers["cache-control"] == "no-cache"
+    assert c.get("/finance.js").headers["cache-control"] == "no-cache"

@@ -253,11 +253,12 @@ function questCard(q, mode) {
 async function renderToday() {
   const day = state.playerDay || state.meta.today;
   const isToday = !state.playerDay || state.playerDay === state.meta.today;
-  const [d, , prom, plan, habits, rating] = await Promise.all([api("GET", "/day/" + day), loadHud(),
+  const [d, , prom, plan, habits, rating, money] = await Promise.all([api("GET", "/day/" + day), loadHud(),
     isToday ? api("GET", "/promises") : null, isToday ? api("GET", "/plan/day/" + day) : null,
-    isToday ? api("GET", "/habits") : null, api("GET", "/rating/" + day)]);
+    isToday ? api("GET", "/habits") : null, api("GET", "/rating/" + day),
+    isToday ? api("GET", "/fin/envelopes").catch(() => null) : null]);
   state.meta.today = d.today;
-  const qs = d.quests.filter(q => q.category !== "habit");
+  const qs = d.quests.filter(q => q.category !== "habit" && q.category !== "money");
   const canPlay = day <= d.today;
   const planned = qs.reduce((s, q) => s + q.xp, 0);
   const got = d.stats.xp_on_day;
@@ -274,6 +275,11 @@ async function renderToday() {
       </div>
     </div>`;
   if (plan) html += startByHtml(plan.start_by);
+  if (money && money.on) {
+    const left = money.left_today;
+    html += `<div class="banner money" data-act="toMoney">💰 ${left >= 0 ? `Можно сегодня <b>${rubR(left)}</b>` : `Больше лимита на <b>${rubR(-left)}</b>`}
+      <span class="muted small">· до ${money.next_income ? ddmm(money.next_income.next) : money.days_left + " дн"}${money.unallocated > 0 ? " · 📥 есть неразложенные" : ""}</span></div>`;
+  }
 
   if (qs.length) {
     html += `<div class="dayprog">
@@ -379,6 +385,7 @@ actions.mark = async el => {
   celebrate(res, res.quest);
   await renderToday();
 };
+actions.toMoney = () => { state.finTab = "home"; return go("finance"); };
 actions.toAdmin = el => { state.adminDay = el.dataset.day; return go("admin"); };
 
 // ================= Экран: Админ =================
