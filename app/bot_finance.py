@@ -22,6 +22,8 @@ from .rules import progress_bar
 import re
 
 K_FIN = "💰 Финансы"
+K_MONEY = "💰 Деньги"
+from .envelopes import ENVS, SPEND_ENVS, EnvError
 
 
 class ShiftFlow(StatesGroup):
@@ -38,12 +40,21 @@ class TxDate(StatesGroup):
     text = State()
 
 
+class EnvMove(StatesGroup):
+    amount = State()
+
+
 def kb(*rows) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[r for r in rows if r])
 
 
 def short(text: str, n: int = 24) -> str:
     return text if len(text) <= n else text[: n - 1] + "…"
+
+
+def rubr(k: int) -> str:
+    """Без копеек — для конвертов и прогнозов."""
+    return rub(round(k / 100) * 100)
 
 
 def ddmm(iso: str) -> str:
@@ -69,6 +80,14 @@ class FinUI:
 
     def limit_line(self) -> str:
         t = self.ui.today()
+        env = self.game.env
+        if env.on:
+            b = env.budget(t)
+            lim, spent = b["limit"], b["spent_today"]
+            line = f"Сегодня: <b>{rub(spent)}</b> / {rub(lim)}  {progress_bar(min(spent, lim), max(lim, 1), 8)}"
+            if spent > lim:
+                line += f"\n⚠️ Больше лимита на {rub(spent - lim)} — завтрашний станет меньше"
+            return line
         spent, lim = self.fin.spent_today(t), self.fin.daily_limit
         if not lim:
             return f"Сегодня потрачено: <b>{rub(spent)}</b>"
@@ -111,14 +130,108 @@ class FinUI:
         today = self.ui.today()
         when = "" if t["day"] == today.isoformat() else \
             " · 📅 вчера" if t["day"] == (today - timedelta(days=1)).isoformat() else f" · 📅 {ddmm(t['day'])}"
-        text = f"{icon} <b>{sign}{rub(t['amount'])}</b> · {t['emoji']} {t['cat_title']}{note}{when}"
-        if t["kind"] == "out" and t["in_limit"] and not when:
+        envl = f" → {t['env_emoji']} {t['env_title']}" if t.get("envelope") in SPEND_ENVS else ""
+        text = f"{icon} <b>{sign}{rub(t['amount'])}</b> · {t['emoji']} {t['cat_title']}{note}{when}{envl}"
+        if t["kind"] == "out" and t["in_limit"] and not when and t.get("envelope") != "want":
             text += "\n" + self.limit_line()
+        if t.get("envelope") == "want" and self.game.env.on:
+            text += f"\n🎯 В «Хотелках» осталось {rubr(self.game.env.balance('want'))}"
         if t["kind"] == "in":
             text += f"\nСвободно: {rub(self.fin.balance())}"
-        return text, kb([Btn(text="🏷 Категория", callback_data=f"fin:cats:{t['id']}"),
+        env_row = None
+        if t["kind"] == "out" and t["source"] == "manual":
+            env_row = [Btn(text=("• " if t.get("envelope") == k else "") + f"{ENVS[k][0]} {ENVS[k][1]}",
+                           callback_data=f"fin:env:{t['id']}:{k}") for k in SPEND_ENVS]
+        return text, kb(env_row,
+                        [Btn(text="🏷 Категория", callback_data=f"fin:cats:{t['id']}"),
                          Btn(text="📅 Не сегодня" if not when else "📅 Дата", callback_data=f"fin:day:{t['id']}"),
-                         Btn(text="🗑 Отменить", callback_data=f"fin:del:{t['id']}")])
+                         Btn(text="🗑", callback_data=f"fin:del:{t['id']}")])
+
+    # ---------- конверты ----------
+
+    def money(self) -> tuple[str, InlineKeyboardMarkup]:
+        """Короткий экран «Деньги»: сколько можно сегодня, до следующих денег, прогноз."""
+        t = self.ui.today()
+        env = self.game.env
+        env.settle(t)
+        b = env.budget(t)
+        rows = []
+        if not b["on"]:
+            lines = ["💰 <b>Деньги</b>", "",
+                     f"Свободно: <b>{rub(self.fin.balance())}</b>",
+                     "", "💌 Конверты ещё не настроены. Разложим деньги на Обязательное, Копилку, "
+                         "Я, Отношения и Хотелки — и лимит на день будет считаться сам."]
+            if b["unallocated"] > 0:
+                rows.append([Btn(text=f"💌 Разложить {rub(b['unallocated'])}", callback_data="env:prop")])
+            else:
+                lines.append("\nСначала укажи, сколько денег у тебя сейчас: в приложении Финансы → Обзор → ⚙ "
+                             "«Сколько денег было на старте». Или просто запиши следующий доход — его и разложим.")
+        else:
+            nxt = b["next_income"]
+            until = f"до {ddmm(nxt['next'])} ({escape(nxt['title'])})" if nxt else f"на {b['days_left']} дн"
+            left = b["left_today"]
+            lines = ["💰 <b>Деньги</b>", "",
+                     f"Можно сегодня: <b>{rubr(max(0, left))}</b>" + (f" · потрачено {rub(b['spent_today'])}" if b["spent_today"] else "")
+                     + ("" if left >= 0 else f"\n⚠️ Больше лимита на {rub(-left)}"),
+                     f"{until}: 🧍❤️ {rubr(b['spendable'])} · 🎯 {rubr(b['want'])}"]
+            fc = b["forecast"]
+            if fc >= 0:
+                lines.append(f"🔮 К следующим деньгам останется ~<b>{rubr(fc)}</b>")
+            else:
+                lines.append(f"⚠️ В текущем темпе не хватит <b>{rubr(-fc)}</b> — притормози")
+            if b["oblig"] < b["oblig_need"]:
+                lines.append(f"📅 На обязательное не хватает {rub(b['oblig_need'] - b['oblig'])}")
+            if b["unallocated"] > 0:
+                lines.append(f"\n📥 Не разложено: <b>{rub(b['unallocated'])}</b>")
+                rows.append([Btn(text="💌 Разложить", callback_data="env:prop")])
+            if b["saved_month"] > 0:
+                lines.append(f"🏦 В копилку за месяц: {rub(b['saved_month'])}")
+        rows += [[Btn(text="💌 Конверты", callback_data="env:list"), Btn(text="💼 Смены", callback_data="fin:salary")],
+                 [Btn(text="📅 Платежи", callback_data="fin:plans"), Btn(text="🎯 Желания", callback_data="fin:wishes")],
+                 [Btn(text="📊 Подробнее", callback_data="fin:home")]]
+        return "\n".join(lines), kb(*rows)
+
+    def envelopes(self) -> tuple[str, InlineKeyboardMarkup]:
+        env = self.game.env
+        t = self.ui.today()
+        bal, st = env.balances(), env.settings()
+        lines = ["💌 <b>Конверты</b>", ""]
+        for k, (e, title) in ENVS.items():
+            share = f" · {st['shares'][k]}%" if k in SPEND_ENVS else ""
+            lines.append(f"{e} {title}: <b>{rubr(bal[k])}</b>{share}")
+        un = env.unallocated()
+        lines.append(f"\n📥 Не разложено: {rub(un)}")
+        lines.append(f"🏦 Копилка: {st['save_pct']}% с каждых денег")
+        ex = env.expected(t)
+        lines.append("\n📆 <b>Ожидаемые деньги</b>: " + (", ".join(f"{escape(x['title'])} {ddmm(x['next'])}" for x in ex[:3])
+                                                     if ex else "не указаны — добавь в приложении (лимит считается на 14 дн)"))
+        ls = env.learned_shares(t)
+        rows = []
+        if ls and ls["shares"] != st["shares"]:
+            sh = ls["shares"]
+            lines.append(f"\n🧠 По факту ты тратишь: 🧍 {sh['me']}% · ❤️ {sh['rel']}% · 🎯 {sh['want']}%")
+            rows.append([Btn(text="🧠 Поставить доли по факту", callback_data="env:learn")])
+        if un > 0:
+            rows.append([Btn(text=f"💌 Разложить {rub(un)}", callback_data="env:prop")])
+        rows.append([Btn(text="↔️ Переложить", callback_data="env:mv"), Btn(text="🏦 В копилку", callback_data="env:sv")])
+        rows.append([Btn(text="⬅️ Деньги", callback_data="env:money")])
+        return "\n".join(lines), kb(*rows)
+
+    def proposal(self, amount: int, title: str = "") -> tuple[str, InlineKeyboardMarkup] | None:
+        env = self.game.env
+        amount = min(amount, env.unallocated())
+        if amount <= 0:
+            return None
+        p = env.plan(amount, self.ui.today())
+        lines = [f"📥 {title or 'Пришли деньги'}: <b>{rub(amount)}</b>. Разложим?", ""]
+        if p["oblig"]:
+            lines.append(f"📅 Обязательное: {rub(p['oblig'])}")
+        if p["save"]:
+            lines.append(f"🏦 Копилка: {rub(p['save'])} ({p['save_pct']}%)")
+        for k in SPEND_ENVS:
+            lines.append(f"{ENVS[k][0]} {ENVS[k][1]}: {rub(p[k])}")
+        return "\n".join(lines), kb([Btn(text="✅ Разложить", callback_data=f"env:ok:{amount}"),
+                                     Btn(text="Не сейчас", callback_data="env:no")])
 
     def salary(self) -> tuple[str, InlineKeyboardMarkup]:
         comps = self.fin.companies()
@@ -142,7 +255,7 @@ class FinUI:
                 rows.append([Btn(text=f"💰 {ddmm(s['day'])} {short(s['company'], 12)} · {s['work_type']} · {rub(s['amount'])}",
                                  callback_data=f"fin:spay:{s['id']}")])
         lines.append(f"\nВсего ждём: <b>{rub(self.fin.expected_salary())}</b>")
-        rows.append([Btn(text="➕ Смена", callback_data="fin:shift"), Btn(text="⬅️ Финансы", callback_data="fin:home")])
+        rows.append([Btn(text="➕ Смена", callback_data="fin:shift"), Btn(text="⬅️ Деньги", callback_data="env:money")])
         return "\n".join(lines), kb(*rows)
 
     def plans(self) -> tuple[str, InlineKeyboardMarkup]:
@@ -157,7 +270,7 @@ class FinUI:
                          f"{days_word(p['days_left'])} ({ddmm(p['due'])}){rep[p['repeat']]}")
             if p["days_left"] <= 7:
                 rows.append([Btn(text=f"✅ Оплатил: {short(p['title'], 20)}", callback_data=f"fin:ppay:{p['id']}")])
-        rows.append([Btn(text="⬅️ Финансы", callback_data="fin:home")])
+        rows.append([Btn(text="⬅️ Деньги", callback_data="env:money")])
         return "\n".join(lines), kb(*rows)
 
     def wishes(self) -> tuple[str, InlineKeyboardMarkup]:
@@ -170,7 +283,7 @@ class FinUI:
                          f"{rub(w['saved'])} / {rub(w['target'])} ({w['progress']}%)")
             rows.append([Btn(text=f"➕ Отложить: {short(w['title'], 22)}", callback_data=f"fin:wadd:{w['id']}")])
         lines.append(f"\nСвободно: {rub(self.fin.balance())}")
-        rows.append([Btn(text="⬅️ Финансы", callback_data="fin:home")])
+        rows.append([Btn(text="⬅️ Деньги", callback_data="env:money")])
         return "\n".join(lines), kb(*rows)
 
     def recent(self) -> tuple[str, InlineKeyboardMarkup]:
@@ -183,7 +296,7 @@ class FinUI:
             sign = "+" if x["kind"] == "in" else "−"
             note = f" {escape(x['note'])}" if x["note"] else ""
             lines.append(f"{ddmm(x['day'])} {x['emoji']} <b>{sign}{rub(x['amount'])}</b>{note}")
-        return "\n".join(lines), kb([Btn(text="⬅️ Финансы", callback_data="fin:home")])
+        return "\n".join(lines), kb([Btn(text="⬅️ Деньги", callback_data="env:money")])
 
     def digest_lines(self) -> tuple[list[str], list[list[Btn]]]:
         """Платежи для утренней сводки."""
@@ -225,7 +338,7 @@ def register_finance(router: Router, ui, edit, celebrate, main_kb) -> FinUI:
     @router.message(F.text == K_FIN)
     async def k_fin(msg: Message, state: FSMContext):
         await state.clear()
-        text, markup = fu.overview()
+        text, markup = fu.money()
         await msg.answer(text, reply_markup=markup)
 
     @router.callback_query(F.data.in_({"fin:home", "fin:salary", "fin:plans", "fin:wishes", "fin:recent"}))
@@ -458,6 +571,9 @@ def register_finance(router: Router, ui, edit, celebrate, main_kb) -> FinUI:
         await cb.answer(f"💰 +{rub(s['amount'])} в доходы")
         text, markup = fu.salary()
         await edit(cb, text, markup)
+        prop = fu.proposal(s["amount"], f"Оплата смены ({escape(s['company'])})")
+        if prop:
+            await cb.message.answer(prop[0], reply_markup=prop[1])
 
     @router.callback_query(F.data.startswith("fin:cpay:"))
     async def company_pay(cb: CallbackQuery):
@@ -470,6 +586,9 @@ def register_finance(router: Router, ui, edit, celebrate, main_kb) -> FinUI:
         await cb.answer(f"💰 {n} {plural(n, 'смена', 'смены', 'смен')}, +{rub(total)}", show_alert=True)
         text, markup = fu.salary()
         await edit(cb, text, markup)
+        prop = fu.proposal(total, f"Зарплата от {escape(company)}")
+        if prop:
+            await cb.message.answer(prop[0], reply_markup=prop[1])
         new = [a for a in ui.game.full_stats(ui.today())["achievements"] if a["done"] and a["key"] not in before]
         await celebrate(cb.message, {"level_before": 0, "level_after": 0, "new_achievements": new})
 
@@ -557,5 +676,111 @@ def register_finance(router: Router, ui, edit, celebrate, main_kb) -> FinUI:
             return await msg.answer(f"⛔ {escape(str(e))}")
         text, markup = fu.tx_text(t)
         await msg.answer(text, reply_markup=markup)
+        if kind == "in":
+            prop = fu.proposal(t["amount"], escape(t["note"] or "Доход"))
+            if prop:
+                await msg.answer(prop[0], reply_markup=prop[1])
+
+    # ---------- конверты: кнопки ----------
+
+    @router.message(F.text == K_MONEY)
+    async def k_money(msg: Message, state: FSMContext):
+        await state.clear()
+        text, markup = fu.money()
+        await msg.answer(text, reply_markup=markup)
+
+    @router.callback_query(F.data.in_({"env:money", "env:list"}))
+    async def env_screens(cb: CallbackQuery, state: FSMContext):
+        await state.clear()
+        await cb.answer()
+        text, markup = (fu.money if cb.data == "env:money" else fu.envelopes)()
+        await edit(cb, text, markup)
+
+    @router.callback_query(F.data == "env:prop")
+    async def env_prop(cb: CallbackQuery):
+        prop = fu.proposal(ui.game.env.unallocated(), "Неразложенные деньги")
+        await cb.answer()
+        if not prop:
+            return await cb.message.answer("Нечего раскладывать — все деньги уже по конвертам 👌")
+        await cb.message.answer(prop[0], reply_markup=prop[1])
+
+    @router.callback_query(F.data.startswith("env:ok:"))
+    async def env_ok(cb: CallbackQuery):
+        amount = min(int(cb.data.split(":")[2]), ui.game.env.unallocated())
+        try:
+            res = ui.game.env.apply(amount, ui.today())
+        except (EnvError, FinError) as e:
+            return await fin_err(cb, e)
+        await cb.answer("💌 Разложено")
+        b = ui.game.env.budget(ui.today())
+        await edit(cb, f"💌 <b>Разложено {rub(amount)}</b>\nТеперь можно ~<b>{rub(b['per_day_now'])}</b> в день "
+                       f"на {b['days_left']} дн. 🎯 Хотелки: {rubr(b['want'])}",
+                   kb([Btn(text="💰 Деньги", callback_data="env:money")]))
+        await celebrate(cb.message, {"level_before": 0, "level_after": 0, "new_achievements": res["new_achievements"]})
+
+    @router.callback_query(F.data == "env:no")
+    async def env_no(cb: CallbackQuery):
+        await cb.answer("Ок, потом — в «💰 Деньги»")
+        await edit(cb, "📥 Деньги пока не разложены — это можно сделать в «💰 Деньги».")
+
+    @router.callback_query(F.data.startswith("fin:env:"))
+    async def tx_env(cb: CallbackQuery):
+        _, _, tid, env = cb.data.split(":")
+        try:
+            t = ui.game.env.set_tx_envelope(int(tid), env)
+        except (EnvError, FinError) as e:
+            return await fin_err(cb, e)
+        await cb.answer(f"{ENVS[env][0]} {ENVS[env][1]}")
+        text, markup = fu.tx_text(t)
+        await edit(cb, text, markup)
+
+    @router.callback_query(F.data == "env:learn")
+    async def env_learn(cb: CallbackQuery):
+        ls = ui.game.env.learned_shares(ui.today())
+        if not ls:
+            return await cb.answer("Пока мало данных", show_alert=True)
+        ui.game.env.save_settings(shares=ls["shares"])
+        await cb.answer("🧠 Доли обновлены")
+        text, markup = fu.envelopes()
+        await edit(cb, text, markup)
+
+    @router.callback_query(F.data.in_({"env:mv", "env:sv"}))
+    async def env_mv_src(cb: CallbackQuery):
+        dst = "save" if cb.data == "env:sv" else None
+        bal = ui.game.env.balances()
+        btns = [Btn(text=f"{ENVS[k][0]} {ENVS[k][1]} · {rubr(bal[k])}", callback_data=f"env:src:{k}:{dst or '-'}")
+                for k in ("me", "rel", "want", "oblig") if bal[k] > 0]
+        await cb.answer()
+        if not btns:
+            return await edit(cb, "Во всех конвертах пусто.", kb([Btn(text="⬅️", callback_data="env:list")]))
+        await edit(cb, "Из какого конверта?", kb(*[[b] for b in btns], [Btn(text="⬅️", callback_data="env:list")]))
+
+    @router.callback_query(F.data.startswith("env:src:"))
+    async def env_mv_dst(cb: CallbackQuery, state: FSMContext):
+        _, _, src, dst = cb.data.split(":")
+        if dst == "-":
+            btns = [Btn(text=f"{ENVS[k][0]} {ENVS[k][1]}", callback_data=f"env:src:{src}:{k}") for k in ENVS if k != src]
+            btns.append(Btn(text="🏦 Копилка", callback_data=f"env:src:{src}:save"))
+            await cb.answer()
+            return await edit(cb, "Куда переложить?", kb(btns[:3], btns[3:], [Btn(text="⬅️", callback_data="env:list")]))
+        await state.set_state(EnvMove.amount)
+        await state.update_data(src=src, dst=dst)
+        await cb.answer()
+        to = "🏦 Копилка" if dst == "save" else f"{ENVS[dst][0]} {ENVS[dst][1]}"
+        await cb.message.answer(f"{ENVS[src][0]} {ENVS[src][1]} → {to}. Сколько? Напиши сумму, например <code>500</code>")
+
+    @router.message(EnvMove.amount, F.text)
+    async def env_mv_amount(msg: Message, state: FSMContext):
+        m = re.match(r"^\s*" + AMOUNT + r"\s*$", msg.text, re.I)
+        if not m:
+            return await msg.answer("Нужна сумма, например <code>500</code>")
+        data = await state.get_data()
+        await state.clear()
+        try:
+            ui.game.env.move(data["src"], data["dst"], to_kop(m.group(1), m.group(2)), ui.today())
+        except (EnvError, FinError) as e:
+            return await msg.answer(f"⛔ {escape(str(e))}")
+        text, markup = fu.envelopes()
+        await msg.answer("↔️ Готово\n\n" + text, reply_markup=markup)
 
     return fu

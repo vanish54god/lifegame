@@ -538,8 +538,12 @@ def register_planner(router: Router, ui, edit, celebrate) -> PlanUI:
             return await err(cb, e)
         h = res["habit"]
         await cb.answer(f"{h['emoji']} +{h['xp']} XP · 🔥{h['streak']} {h['unit']}" if res["done"] else "Отметка снята")
-        text, markup = ui.render_day(ui.today())
-        await edit(cb, text, markup)
+        if cb.message.text and cb.message.text.lstrip().startswith("🔁"):     # отдельный список привычек
+            hl, hr = pu.habit_block()
+            await edit(cb, "\n".join(hl).strip(), kb(*hr))
+        else:
+            text, markup = ui.render_day(ui.today())
+            await edit(cb, text, markup)
         await celebrate(cb.message, res)
 
     # ================= Оценка дня =================

@@ -28,6 +28,8 @@ CATEGORIES: dict[str, Category] = {
     "promise": Category("promise", "Обещание", "💌", 30, 150, False, pickable=False),
     # отметка привычки
     "habit": Category("habit", "Привычка", "🔁", 10, 50, False, pickable=False),
+    # день, прожитый в лимите трат
+    "money": Category("money", "Деньги", "💰", 10, 50, False, pickable=False),
 }
 
 # Слова, которыми можно назвать категорию в команде боту
@@ -121,3 +123,13 @@ def suggest_xp(category: "Category", difficulty: int) -> int:
     """Подсказка цены при переносе из банка: середина диапазона категории × сложность."""
     mid = (category.xp_min + category.xp_max) / 2
     return max(10, int(round(mid * DIFFICULTY.get(difficulty, DIFFICULTY[2])[2] / 10) * 10))
+
+
+# Что бот показывает в «Сегодня» сразу, а что — только по кнопке (☰ Ещё → ⚙ и вкладка «Ещё» в приложении)
+BOT_SHOW = {
+    "show_time": ("⏰ Когда начинать", "1"),
+    "show_money": ("💰 Сколько можно потратить", "1"),
+    "show_habits": ("🔁 Привычки списком", "0"),
+    "show_promises": ("💌 Обещания списком", "0"),
+    "show_rating": ("⭐ Оценка дня (иначе — после 20:00)", "0"),
+}

@@ -23,9 +23,12 @@ from .web_finance import add_finance_routes
 from .web_planner import add_planner_routes
 from .planner import PlanError
 from .life import LifeError
+from .envelopes import EnvError
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+
+BOT_SHOW = rules.BOT_SHOW
 
 
 # ---------- Что приходит от приложения ----------
@@ -110,6 +113,7 @@ def create_app(cfg: Config, game: Game, auth: Auth) -> FastAPI:
     @app.exception_handler(FinError)
     @app.exception_handler(PlanError)
     @app.exception_handler(LifeError)
+    @app.exception_handler(EnvError)
     async def fin_error(_: Request, e: Exception):
         return JSONResponse({"detail": str(e)}, status_code=400)
 
@@ -257,6 +261,13 @@ def create_app(cfg: Config, game: Game, auth: Auth) -> FastAPI:
         game.refund(pid)
         return {"ok": True}
 
+    @app.put("/api/settings/show", dependencies=[Depends(require_auth)])
+    async def put_show(body: dict):
+        for key, on in body.items():
+            if key in BOT_SHOW:
+                game.set_setting(key, "1" if on else "0")
+        return await get_settings()
+
     # ================= Обещания =================
 
     @app.get("/api/promises", dependencies=[Depends(require_auth)])
@@ -299,6 +310,8 @@ def create_app(cfg: Config, game: Game, auth: Auth) -> FastAPI:
                 "bedtime": game.get_setting("bedtime", "00:00"),
                 "capacity_h": float(game.get_setting("capacity_h", "6")),
                 "remind_startby": game.get_setting("remind_startby", "1") == "1",
+                "show": {k: game.get_setting(k, d) == "1" for k, (_, d) in BOT_SHOW.items()},
+                "show_titles": {k: t for k, (t, _) in BOT_SHOW.items()},
                 "sessions": auth.sessions_count(),
                 "day_start_hour": cfg.day_start_hour}
 

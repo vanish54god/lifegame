@@ -776,6 +776,11 @@ async function renderSettings() {
     </form>
     ${habitsBlock}
 
+    <div class="h2">🤖 Что бот показывает в «Сегодня» сразу</div>
+    <div class="card">${Object.entries(st.show).map(([k, on]) => `<label class="row small" style="padding:6px 0">
+      <input type="checkbox" data-input="botShow" data-k="${k}" ${on ? "checked" : ""}> ${esc(st.show_titles[k])}</label>`).join("")}
+      <p class="muted small" style="margin-bottom:0">Выключенное остаётся в боте — по маленьким кнопкам под квестами. То же самое: в боте ☰ Ещё → ⚙.</p></div>
+
     <div class="h2">Напоминания в Telegram</div>
     <form class="card" data-submit="saveSettings">
       <p class="muted small" style="margin-top:0">Необязательно. Оставь поле пустым — напоминания не будет.</p>
@@ -830,6 +835,10 @@ actions.saveSettings = async form => {
   if (f.bedtime) Object.assign(body, { bedtime: f.bedtime.value || "00:00", capacity_h: Number(f.capacity.value) || 6,
                                        remind_startby: f.startby.checked });
   await api("PUT", "/settings", body);
+  toast("Сохранено");
+};
+actions.botShow = async el => {
+  await api("PUT", "/settings/show", { [el.dataset.k]: el.checked });
   toast("Сохранено");
 };
 actions.logout = async () => {

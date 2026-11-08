@@ -6,13 +6,14 @@ function rub(k, sign = false) {
   const s = k < 0 ? "−" : sign && k > 0 ? "+" : "";
   return s + (Math.abs(k) / 100).toLocaleString("ru-RU", { maximumFractionDigits: 2 }) + " ₽";
 }
+const rubR = (k, sign = false) => rub(Math.round(k / 100) * 100, sign);   // без копеек — для конвертов
 const bar = (v, max) => `<div class="dayprog-bar"><div class="dayprog-fill" style="width:${max ? Math.min(100, (100 * v) / max) : 0}%;background:${max && v > max ? "var(--bad)" : "var(--money)"}"></div></div>`;
 
 state.finTab = "home";
 state.finPeriod = 30;
 let finMeta = null;
 
-const FIN_TABS = [["home", "Обзор"], ["tx", "Операции"], ["shifts", "Смены"], ["plans", "Платежи"],
+const FIN_TABS = [["home", "Обзор"], ["env", "Конверты"], ["tx", "Операции"], ["shifts", "Смены"], ["plans", "Платежи"],
                   ["wishes", "Желания"], ["savings", "Копилки"], ["stats", "Статистика"]];
 
 screens.finance = async function renderFinance() {
@@ -35,6 +36,7 @@ function txRow(t) {
   const color = t.kind === "in" ? "var(--money)" : "var(--ink)";
   return `<li><span style="font-size:20px">${t.emoji}</span>
     <div class="q-body"><div>${esc(t.note || t.cat_title)}</div><div class="muted small">${ddmm(t.day)} · ${esc(t.cat_title)}${t.in_limit ? "" : t.kind === "out" ? " · вне лимита" : ""}</div></div>
+    ${t.kind === "out" && t.source === "manual" && t.envelope ? `<button class="btn btn-sm btn-ghost" data-act="txEnv" data-id="${t.id}" data-env="${t.envelope}" title="Конверт: ${esc(t.env_title)} (нажми, чтобы сменить)">${t.env_emoji}</button>` : ""}
     <b style="color:${color};white-space:nowrap">${sign}${rub(t.amount)}</b>
     ${t.kind !== "move" && t.source === "manual" ? `<label class="btn btn-sm btn-ghost tx-date" aria-label="Изменить дату">📅<input type="date" data-input="txDay" data-id="${t.id}" value="${t.day}" max="${state.meta.today}"></label>` : ""}
     ${t.kind !== "move" ? `<button class="btn btn-sm btn-ghost" data-act="txDel" data-id="${t.id}" aria-label="Удалить">✕</button>` : ""}</li>`;
@@ -43,10 +45,49 @@ function txRow(t) {
 const FIN = {};
 
 // ---------- Обзор ----------
+function envCard(e) {
+  const E = e.envs;
+  let html = "";
+  if (e.on) {
+    const left = e.left_today, nxt = e.next_income;
+    const until = nxt ? `до ${ddmm(nxt.next)} (${esc(nxt.title)}) — ${e.days_left} дн` : `горизонт ${e.days_left} дн`;
+    html += `<div class="budget-card">
+      <div class="row"><div class="stat-label">Можно сегодня</div><span class="spacer"></span>${e.streak ? `<span class="tag">🛡 ${e.streak} дн в лимите</span>` : ""}</div>
+      <div class="wallet-num" style="text-align:left;${left < 0 ? "color:var(--bad)" : ""}">${rubR(Math.max(0, left))}</div>
+      <div class="muted small">${left < 0 ? `больше лимита на ${rubR(-left)} · ` : ""}потрачено ${rubR(e.spent_today)} из ${rubR(e.limit)} · ${until}</div>
+      <div style="margin:8px 0">${bar(e.spent_today, Math.max(e.limit, 1))}</div>
+      <div class="small">${e.forecast >= 0 ? `🔮 К следующим деньгам останется ~<b>${rubR(e.forecast)}</b>` : `⚠️ В текущем темпе не хватит <b>${rubR(-e.forecast)}</b> — притормози`}</div>
+      ${e.oblig < e.oblig_need ? `<div class="small" style="color:var(--bad)">📅 На обязательное не хватает ${rubR(e.oblig_need - e.oblig)}</div>` : ""}
+      <div class="env-row">${["oblig", "me", "rel", "want"].map(k => `<div class="env"><span>${E[k].emoji}</span><b>${rubR(e.balances[k])}</b><span class="muted">${esc(E[k].title)}</span></div>`).join("")}</div>
+      ${e.saved_month > 0 ? `<div class="small muted" style="margin-top:6px">🏦 В копилку за месяц: ${rubR(e.saved_month)}</div>` : ""}
+    </div>`;
+  } else {
+    html += `<div class="budget-card"><div class="h3" style="color:var(--ink)">💌 Конверты</div>
+      <p class="small muted" style="margin:4px 0 0">Пришли деньги → сначала 📅 обязательные платежи, потом 🏦 копилка, остальное по конвертам 🧍 Я · ❤️ Отношения · 🎯 Хотелки.
+      Лимит на день будет считаться сам до следующих денег, а день в лимите даёт +20 XP.</p>
+      ${e.unallocated <= 0 ? `<p class="small" style="margin:8px 0 0">👉 Сначала укажи, сколько денег у тебя сейчас: ниже, в «⚙ Настройки финансов» → «Сколько денег было на старте». Или просто запиши следующий доход — его и разложим.</p>` : ""}</div>`;
+  }
+  if (e.plan) {
+    const p = e.plan;
+    html += `<div class="card alloc"><div class="row"><b>📥 Не разложено: ${rubR(e.unallocated)}</b></div>
+      <div class="alloc-parts small">${p.oblig ? `<span>📅 ${rubR(p.oblig)}</span>` : ""}${p.save ? `<span>🏦 ${rubR(p.save)}</span>` : ""}
+        <span>🧍 ${rubR(p.me)}</span><span>❤️ ${rubR(p.rel)}</span><span>🎯 ${rubR(p.want)}</span></div>
+      <button class="btn btn-accent wide" data-act="envApply">💌 Разложить</button></div>`;
+  }
+  return html;
+}
+actions.envApply = async () => {
+  const r = await api("POST", "/fin/envelopes/apply", {});
+  splash("Разложено", rub(r.amount), "level");
+  celebrate(r);
+  await reFin();
+};
+
 FIN.home = async () => {
-  const o = await api("GET", "/fin/overview");
-  const lim = o.daily_limit, spent = o.spent_today;
-  let html = `<div class="wallet"><div class="stat-label">Свободно</div><div class="wallet-num">${rub(o.balance)}</div>
+  const [o, e] = await Promise.all([api("GET", "/fin/overview"), api("GET", "/fin/envelopes")]);
+  for (const r of e.rewards || []) toast(`💰 ${ddmm(r.day)} в лимите · сэкономил ${rub(r.saved)} · +20 XP`, "ach");
+  const lim = e.on ? e.limit : o.daily_limit, spent = e.on ? e.spent_today : o.spent_today;
+  let html = envCard(e) + `<div class="wallet" style="padding-top:12px"><div class="stat-label">Всего свободно</div><div class="wallet-num" style="font-size:34px">${rub(o.balance)}</div>
       <div class="muted small">месяц: <span style="color:var(--money)">${rub(o.month_in, true)}</span> / −${rub(o.month_out)}</div></div>
     <form class="row" data-submit="finQuick" style="margin:14px 0">
       <input class="input" name="text" maxlength="100" placeholder="кофе 250 · +5000 монтаж" required>
@@ -55,8 +96,8 @@ FIN.home = async () => {
         <option value="${addDays(state.meta.today, -2)}">Позавчера</option></select>
       <button class="btn btn-accent" type="submit">＋</button></form>
     <div class="tiles">
-      <div class="tile"><div class="stat-label">Сегодня</div><div class="stat-value" style="${lim && spent > lim ? "color:var(--bad)" : ""}">${rub(spent)}</div>
-        <div class="stat-sub">${lim ? `лимит ${rub(lim)}${o.limit_streak ? ` · 🛡 ${o.limit_streak} дн` : ""}` : "лимит не задан"}</div>${lim ? bar(spent, lim) : ""}</div>
+      ${e.on ? "" : `<div class="tile"><div class="stat-label">Сегодня</div><div class="stat-value" style="${lim && spent > lim ? "color:var(--bad)" : ""}">${rub(spent)}</div>
+        <div class="stat-sub">${lim ? `лимит ${rub(lim)}${o.limit_streak ? ` · 🛡 ${o.limit_streak} дн` : ""}` : "лимит не задан"}</div>${lim ? bar(spent, lim) : ""}</div>`}
       <div class="tile"><div class="stat-label">Ждём зарплату</div><div class="stat-value" style="color:var(--accent)">${rub(o.expected_salary)}</div>
         <div class="stat-sub">${o.companies_owed.map(c => esc(c.company)).join(", ") || "все выплатили"}</div></div>
       <div class="tile"><div class="stat-label">Копилки</div><div class="stat-value">${rub(o.savings_total)}</div><div class="stat-sub">накопления и вложения</div></div>
@@ -71,7 +112,7 @@ FIN.home = async () => {
                      : `<div class="empty small">Пусто. Запиши трату строкой выше или в боте: «кофе 250».</div>`);
   html += `<details class="card" style="margin-top:18px"><summary>⚙ Настройки финансов</summary>
     <form data-submit="finSettings">
-      <label class="field"><span>Лимит трат в день, ₽ (0 — без лимита)</span><input class="input" name="limit" type="number" min="0" step="1" inputmode="numeric" value="${finMeta.daily_limit / 100}"></label>
+      <label class="field"><span>Фиксированный лимит в день, ₽ (0 — без лимита; с конвертами считается сам)</span><input class="input" name="limit" type="number" min="0" step="1" inputmode="numeric" value="${finMeta.daily_limit / 100}"></label>
       <label class="field"><span>Сколько денег было на старте, ₽</span><input class="input" name="start" type="number" step="0.01" inputmode="decimal" value="${finMeta.start_balance / 100}"></label>
       <label class="field"><span>Типы работы для смен (через запятую)</span><input class="input" name="types" value="${esc(finMeta.work_types.join(", "))}"></label>
       <p class="muted small">В лимит не считаются плановые платежи, покупки желаний и переводы в копилки.</p>
@@ -81,6 +122,13 @@ FIN.home = async () => {
 actions.finQuick = async form => {
   const t = await api("POST", "/fin/quick", { text: form.text.value, day: form.day.value || null });
   toast(`${t.kind === "in" ? "💵 +" : "💸 −"}${rub(t.amount)} · ${t.emoji} ${esc(t.cat_title)}${t.day !== state.meta.today ? " · 📅 " + ddmm(t.day) : ""}`);
+  await reFin();
+};
+actions.txEnv = async el => {
+  const order = ["me", "rel", "want"];
+  const next = order[(order.indexOf(el.dataset.env) + 1) % 3];
+  const t = await api("PATCH", "/fin/tx/" + el.dataset.id, { envelope: next });
+  toast(`${t.env_emoji} ${esc(t.env_title)}`);
   await reFin();
 };
 actions.txDay = async el => {
@@ -102,6 +150,71 @@ actions.finSettings = async form => {
     work_types: form.types.value.split(",").map(s => s.trim()).filter(Boolean),
   });
   toast("Сохранено");
+  await reFin();
+};
+
+// ---------- Конверты ----------
+FIN.env = async () => {
+  const e = await api("GET", "/fin/envelopes");
+  const st = e.settings, E = e.envs, L = e.learned;
+  let html = envCard(e);
+  html += `<div class="h2">Доли конвертов</div>
+    <form class="card" data-submit="envSettings">
+      <div class="row">${["me", "rel", "want"].map(k => `<label class="field" style="flex:1"><span>${E[k].emoji} ${esc(E[k].title)}, %</span>
+        <input class="input" name="${k}" type="number" min="0" max="100" value="${st.shares[k]}"></label>`).join("")}</div>
+      ${L ? `<p class="small" style="margin-top:0">🧠 По факту (${L.count} трат с ${ddmm(L.since)}): 🧍 ${L.shares.me}% · ❤️ ${L.shares.rel}% · 🎯 ${L.shares.want}%
+        <button type="button" class="btn btn-sm" data-act="envLearn" data-me="${L.shares.me}" data-rel="${L.shares.rel}" data-want="${L.shares.want}">Поставить</button></p>`
+        : `<p class="muted small" style="margin-top:0">Через 2–3 недели записей подскажу доли по твоим реальным тратам.</p>`}
+      <div class="row">
+        <label class="field" style="flex:1"><span>🏦 В копилку, %</span><input class="input" name="save" type="number" min="0" max="80" value="${st.save_pct}"></label>
+        <label class="field" style="flex:2"><span>Копилка</span><select class="input" name="target">
+          ${e.savings.length ? e.savings.map(x => `<option value="${x.id}" ${x.id === st.save_target ? "selected" : ""}>${esc(x.title)}</option>`).join("") : `<option value="0">«Подушка» (создам сам)</option>`}</select></label></div>
+      <label class="field"><span>Если ожидаемых денег нет — считать лимит на, дней</span><input class="input" name="horizon" type="number" min="3" max="45" value="${st.horizon}"></label>
+      <button class="btn btn-accent wide" type="submit">Сохранить</button></form>
+
+    <div class="h2">📆 Ожидаемые деньги</div>
+    <p class="muted small">По ближайшей дате считается «до следующих денег» и лимит на день. Ежемесячные сами переезжают на следующий месяц.</p>
+    ${e.expected.length ? `<ul class="list-plain card">${e.expected.map(x => `<li><div class="q-body"><b>${esc(x.title)}</b>
+      <div class="muted small">${ddmm(x.next)} · через ${x.days_left} дн${x.repeat === "month" ? " · 🔁 каждый месяц" : ""}</div></div>
+      <b>${rub(x.amount)}</b><button class="btn btn-sm btn-ghost" data-act="expDel" data-id="${x.id}" aria-label="Удалить">✕</button></li>`).join("")}</ul>` : ""}
+    <form class="card" data-submit="expAdd">
+      <div class="row"><input class="input" name="title" maxlength="60" placeholder="Карманные" required style="flex:2">
+        <input class="input" name="amount" type="number" min="1" inputmode="decimal" placeholder="₽" required style="flex:1"></div>
+      <div class="row" style="margin-top:10px"><input class="input" name="day" type="date" value="${addDays(state.meta.today, 7)}" required>
+        <select class="input" name="repeat"><option value="month">Каждый месяц</option><option value="none">Разово</option></select></div>
+      <button class="btn btn-accent wide" type="submit" style="margin-top:10px">Добавить</button></form>
+
+    <div class="h2">↔️ Переложить</div>
+    <form class="card row wrap" data-submit="envMove">
+      <select class="input" name="src" style="flex:1">${["me", "rel", "want", "oblig"].map(k => `<option value="${k}">${E[k].emoji} ${esc(E[k].title)} · ${rubR(e.balances[k])}</option>`).join("")}</select>
+      <span>→</span>
+      <select class="input" name="dst" style="flex:1"><option value="save">🏦 Копилка</option>${["me", "rel", "want", "oblig"].map(k => `<option value="${k}">${E[k].emoji} ${esc(E[k].title)}</option>`).join("")}</select>
+      <input class="input" name="amount" type="number" min="1" inputmode="decimal" placeholder="₽" required style="width:100px">
+      <button class="btn" type="submit">OK</button></form>`;
+  return { html };
+};
+actions.envSettings = async form => {
+  const shares = { me: Number(form.me.value), rel: Number(form.rel.value), want: Number(form.want.value) };
+  if (shares.me + shares.rel + shares.want !== 100) throw new Error("Доли должны в сумме давать 100%");
+  await api("PUT", "/fin/envelopes/settings", { shares, save_pct: Number(form.save.value), horizon: Number(form.horizon.value),
+                                                save_target: Number(form.target.value) || 0 });
+  toast("Сохранено");
+  await reFin();
+};
+actions.envLearn = async el => {
+  await api("PUT", "/fin/envelopes/settings", { shares: { me: +el.dataset.me, rel: +el.dataset.rel, want: +el.dataset.want } });
+  toast("🧠 Доли по факту");
+  await reFin();
+};
+actions.expAdd = async form => {
+  await api("POST", "/fin/expected", { title: form.title.value, amount: Number(form.amount.value), day: form.day.value, repeat: form.repeat.value });
+  toast("📆 Добавлено");
+  await reFin();
+};
+actions.expDel = async el => { await api("DELETE", "/fin/expected/" + el.dataset.id); await reFin(); };
+actions.envMove = async form => {
+  await api("POST", "/fin/envelopes/move", { src: form.src.value, dst: form.dst.value, amount: Number(form.amount.value) });
+  toast("↔️ Переложено");
   await reFin();
 };
 

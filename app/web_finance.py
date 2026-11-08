@@ -28,6 +28,27 @@ class QuickIn(BaseModel):
 class TxPatch(BaseModel):
     category: str | None = None
     day: date | None = None
+    envelope: str | None = None
+
+class EnvApply(BaseModel):
+    amount: float | None = Field(None, gt=0, lt=MAX_RUB)
+
+class EnvMoveIn(BaseModel):
+    src: str
+    dst: str
+    amount: float = Field(gt=0, lt=MAX_RUB)
+
+class EnvSettings(BaseModel):
+    shares: dict[str, int] | None = None
+    save_pct: int | None = Field(None, ge=0, le=80)
+    save_target: int | None = None
+    horizon: int | None = Field(None, ge=3, le=45)
+
+class ExpectedIn(BaseModel):
+    title: str = Field(max_length=60)
+    amount: float = Field(gt=0, lt=MAX_RUB)
+    day: date
+    repeat: str = "none"
 
 class ShiftIn(BaseModel):
     day: date
@@ -122,11 +143,55 @@ def add_finance_routes(app: FastAPI, game, today, require_auth) -> None:
             t = fin.set_tx_day(tid, body.day, today())
         if body.category is not None:
             t = fin.set_tx_category(tid, body.category)
+        if body.envelope is not None:
+            t = game.env.set_tx_envelope(tid, body.envelope)
         return t
 
     @app.delete("/api/fin/tx/{tid}", dependencies=auth)
     async def del_tx(tid: int):
         fin.delete_tx(tid)
+        return {"ok": True}
+
+    # ---------- конверты ----------
+
+    @app.get("/api/fin/envelopes", dependencies=auth)
+    async def envelopes():
+        env, t = game.env, today()
+        rewards = env.settle(t)
+        b = env.budget(t)
+        from .envelopes import ENVS
+        return {**b, "rewards": rewards, "settings": env.settings(), "expected": env.expected(t),
+                "learned": env.learned_shares(t), "envs": {k: {"emoji": e, "title": n} for k, (e, n) in ENVS.items()},
+                "plan": env.plan(b["unallocated"], t) if b["unallocated"] > 0 else None,
+                "savings": [{"id": x["id"], "title": x["title"]} for x in fin.savings()],
+                "streak": env.limit_streak(t)}
+
+    @app.post("/api/fin/envelopes/apply", dependencies=auth)
+    async def env_apply(body: EnvApply):
+        un = game.env.unallocated()
+        amount = min(k(body.amount) if body.amount else un, un)
+        return game.env.apply(amount, today())
+
+    @app.post("/api/fin/envelopes/move", dependencies=auth)
+    async def env_move(body: EnvMoveIn):
+        return game.env.move(body.src, body.dst, k(body.amount), today())
+
+    @app.put("/api/fin/envelopes/settings", dependencies=auth)
+    async def env_settings(body: EnvSettings):
+        st = game.env.save_settings(body.shares, body.save_pct, body.save_target, body.horizon)
+        game.env.refresh_today(today())
+        return st
+
+    @app.post("/api/fin/expected", dependencies=auth)
+    async def add_expected(body: ExpectedIn):
+        e = game.env.add_expected(body.title, k(body.amount), body.day, body.repeat)
+        game.env.refresh_today(today())
+        return e
+
+    @app.delete("/api/fin/expected/{eid}", dependencies=auth)
+    async def del_expected(eid: int):
+        game.env.delete_expected(eid)
+        game.env.refresh_today(today())
         return {"ok": True}
 
     # ---------- смены ----------

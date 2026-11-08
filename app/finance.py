@@ -153,6 +153,34 @@ CREATE TABLE IF NOT EXISTS fin_tx (
 );
 CREATE INDEX IF NOT EXISTS idx_fin_tx_day ON fin_tx(day);
 
+-- Конверты: сколько денег положено в каждый (минус — переложено из него)
+CREATE TABLE IF NOT EXISTS env_moves (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    day        TEXT    NOT NULL,
+    env        TEXT    NOT NULL,             -- oblig / me / rel / want
+    amount     INTEGER NOT NULL,             -- копейки, со знаком
+    note       TEXT    NOT NULL DEFAULT '',
+    created_at TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Лимит на день (снимок утром) и итог дня
+CREATE TABLE IF NOT EXISTS fin_day_limit (
+    day     TEXT PRIMARY KEY,
+    lim     INTEGER NOT NULL,
+    spent   INTEGER,
+    settled INTEGER NOT NULL DEFAULT 0
+);
+
+-- Ожидаемые поступления (карманные, оплата заказа…)
+CREATE TABLE IF NOT EXISTS expected_income (
+    id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    title  TEXT    NOT NULL,
+    amount INTEGER NOT NULL,
+    day    TEXT    NOT NULL,
+    repeat TEXT    NOT NULL DEFAULT 'none',  -- none / month
+    active INTEGER NOT NULL DEFAULT 1
+);
+
 CREATE TABLE IF NOT EXISTS shifts (
     id        INTEGER PRIMARY KEY AUTOINCREMENT,
     day       TEXT    NOT NULL,
@@ -248,7 +276,8 @@ class Finance:
     # ---------- операции ----------
 
     def add_tx(self, day: date, kind: str, amount: int, category: str | None = None, note: str = "",
-               in_limit: bool | None = None, source: str = "manual", ref_id: int | None = None) -> dict:
+               in_limit: bool | None = None, source: str = "manual", ref_id: int | None = None,
+               envelope: str | None = None) -> dict:
         if kind not in ("in", "out", "move"):
             raise FinError("Неизвестный тип операции")
         if kind != "move" and amount <= 0:
@@ -261,10 +290,14 @@ class Finance:
             category = category if category in OUT_KEYS else guess_cat(note, "out")
         if in_limit is None:
             in_limit = kind == "out" and source == "manual"
+        if envelope is None and kind == "out" and source == "manual":
+            from .envelopes import default_envelope
+            envelope = default_envelope(category)
         cur = self.conn.execute(
-            "INSERT INTO fin_tx (day, kind, amount, category, note, in_limit, source, ref_id) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (day.isoformat(), kind, amount, category or "move", note.strip()[:200], int(in_limit), source, ref_id))
+            "INSERT INTO fin_tx (day, kind, amount, category, note, in_limit, source, ref_id, envelope) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (day.isoformat(), kind, amount, category or "move", note.strip()[:200], int(in_limit), source, ref_id,
+             envelope))
         self.conn.commit()
         return self.tx(cur.lastrowid)
 
@@ -276,10 +309,13 @@ class Finance:
 
     @staticmethod
     def _tx(row) -> dict:
+        from .envelopes import ENVS
         d = dict(row)
         c = CATS.get(d["category"])
         d["cat_title"] = c.title if c else "Перевод"
         d["emoji"] = c.emoji if c else "🔄"
+        env = ENVS.get(d.get("envelope") or "")
+        d["env_emoji"], d["env_title"] = (env[0], env[1]) if env else ("", "")
         return d
 
     def set_tx_category(self, tx_id: int, category: str) -> dict:
@@ -483,7 +519,8 @@ class Finance:
         p = self.plan(pid)
         if not p["active"]:
             raise FinError("Платёж уже закрыт")
-        self.add_tx(day, "out", p["amount"], p["category"], p["title"], in_limit=False, source="plan", ref_id=pid)
+        self.add_tx(day, "out", p["amount"], p["category"], p["title"], in_limit=False, source="plan", ref_id=pid,
+                    envelope="oblig")
         due = date.fromisoformat(p["due"])
         if p["repeat"] == "month":
             self.conn.execute("UPDATE planned SET due = ? WHERE id = ?", (_add_months(due, 1).isoformat(), pid))

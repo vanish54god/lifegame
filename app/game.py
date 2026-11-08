@@ -133,6 +133,8 @@ ACHIEVEMENTS = [
     ("bookkeeper", "🧾", "Бухгалтер", "Запиши 30 трат", False),
     ("inlimit7", "🛡", "В рамках", "7 дней подряд траты в дневном лимите", False),
     ("dream", "🌠", "Мечта сбылась", "Исполни желание из карты желаний", False),
+    ("envelope1", "💌", "По конвертам", "Впервые разложи деньги по конвертам", False),
+    ("saver10k", "🏦", "Подушка", "10 000 ₽ в накоплениях", False),
     # --- банк заданий и время ---
     ("boss", "💀", "Победил босса", "Выполни задачу сложности «Босс»", False),
     ("early5", "⏳", "Заранее", "5 задач из банка закрыто за 3+ дня до дедлайна", False),
@@ -174,6 +176,8 @@ class Game:
         from .planner import Planner
         from .life import Life
         self.planner = Planner(self)
+        from .envelopes import Envelopes
+        self.env = Envelopes(self)
         self.life = Life(self)
         # для умных чек-инов (в памяти; после перезапуска считаем, что ты только что был активен)
         self.last_activity = time.time()
@@ -244,7 +248,7 @@ class Game:
         q = self.get(quest_id)
         if q.status == "done":
             raise GameError("Выполненный квест удалить нельзя — сначала отмени выполнение")
-        if q.category.key in ("habit", "promise"):
+        if q.category.key in ("habit", "promise", "money"):
             raise GameError("Этот квест управляется своим разделом")
         self.conn.execute("DELETE FROM quests WHERE id = ?", (quest_id,))
         self.conn.commit()
@@ -285,6 +289,8 @@ class Game:
                     "new_achievements": []}
         if q0.category.key == "habit" and status != "done":
             raise GameError("Привычку отмечай в блоке «Привычки»")
+        if q0.category.key == "money":
+            raise GameError("Эту награду начисляет финансовый раздел")
         q, lvl_before, lvl_after = self.set_status(quest_id, status)
         self.planner.after_mark(q, today)        # банк заданий и темп
         new = [a for a in self.full_stats(today)["achievements"]
@@ -647,6 +653,7 @@ class Game:
         n_templates = self.conn.execute("SELECT COUNT(*) FROM templates").fetchone()[0]
         ps = self.promise_stats(today)
         fc = self.fin.counts()
+        ec = self.env.counts()
         bc = self.planner.counts()
         pc = self.planner.pace_counts()
         hd, hw = self.life.best_habit_streaks(today)
@@ -714,7 +721,9 @@ class Game:
             "cleanslate": ps["kept"] >= 5 and ps["open"] == 0,
             "knight": ps["kept"] >= 50,
             "shift1": fc["shifts"] >= 1, "bookkeeper": fc["tx_out"] >= 30,
-            "inlimit7": self.fin.limit_streak(today) >= 7, "dream": fc["wishes_done"] >= 1,
+            "inlimit7": max(self.fin.limit_streak(today), self.env.limit_streak(today)) >= 7,
+            "dream": fc["wishes_done"] >= 1,
+            "envelope1": ec["allocations"] >= 1, "saver10k": ec["saved_total"] >= 1_000_000,
             "payday": fc["max_payout_shifts"] >= 5,
             "boss": bc["boss"] >= 1, "early5": bc["early"] >= 5, "firefighter": bc["fire"] >= 1,
             "splitter": bc["split"] >= 5, "bank_empty": bc["open"] == 0 and bc["done"] >= 10,

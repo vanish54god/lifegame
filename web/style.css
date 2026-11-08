@@ -349,3 +349,14 @@ select.pdue { appearance: none; -webkit-appearance: none; text-align: center; te
 /* дата операции: невидимый календарь поверх кнопки 📅 */
 .tx-date { position: relative; overflow: hidden; }
 .tx-date input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+
+/* ---------- Конверты ---------- */
+.budget-card { margin-top: 10px; padding: 16px; border-radius: 10px; border: 1px solid #2f4a33;
+  background: linear-gradient(160deg, rgba(143,209,138,.10), transparent 60%), var(--surface); }
+.env-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-top: 12px; }
+.env { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 8px 4px; border-radius: 6px;
+  background: var(--surface-2); font-size: 12px; text-align: center; }
+.env span:first-child { font-size: 18px; }
+.env b { font: 700 14px var(--cond); }
+.card.alloc { margin-top: 10px; border-color: var(--accent); }
+.alloc-parts { display: flex; flex-wrap: wrap; gap: 6px 12px; margin: 8px 0 12px; }
