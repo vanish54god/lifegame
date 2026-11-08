@@ -57,7 +57,8 @@ function envCard(e) {
       <div class="muted small">${left < 0 ? `больше лимита на ${rubR(-left)} · ` : ""}потрачено ${rubR(e.spent_today)} из ${rubR(e.limit)} · ${until}</div>
       <div style="margin:8px 0">${bar(e.spent_today, Math.max(e.limit, 1))}</div>
       <div class="small">${e.forecast >= 0 ? `🔮 К следующим деньгам останется ~<b>${rubR(e.forecast)}</b>` : `⚠️ В текущем темпе не хватит <b>${rubR(-e.forecast)}</b> — притормози`}</div>
-      ${e.oblig < e.oblig_need ? `<div class="small" style="color:var(--bad)">📅 На обязательное не хватает ${rubR(e.oblig_need - e.oblig)}</div>` : ""}
+      <div class="small" style="margin-top:4px">📅 Обязательное: отложено <b>${rubR(e.oblig)}</b> · до следующих денег нужно ${rubR(e.oblig_need)} · в месяц ~${rubR(e.oblig_month)}</div>
+      ${e.oblig < e.oblig_need ? `<div class="small" style="color:var(--bad)">⚠️ На обязательное не хватает ${rubR(e.oblig_need - e.oblig)} — переложи из «Я» или «Хотелок»</div>` : ""}
       <div class="env-row">${["oblig", "me", "rel", "want"].map(k => `<div class="env"><span>${E[k].emoji}</span><b>${rubR(e.balances[k])}</b><span class="muted">${esc(E[k].title)}</span></div>`).join("")}</div>
       ${e.saved_month > 0 ? `<div class="small muted" style="margin-top:6px">🏦 В копилку за месяц: ${rubR(e.saved_month)}</div>` : ""}
     </div>`;
@@ -66,6 +67,12 @@ function envCard(e) {
       <p class="small muted" style="margin:4px 0 0">Пришли деньги → сначала 📅 обязательные платежи, потом 🏦 копилка, остальное по конвертам 🧍 Я · ❤️ Отношения · 🎯 Хотелки.
       Лимит на день будет считаться сам до следующих денег, а день в лимите даёт +20 XP.</p>
       ${e.unallocated <= 0 ? `<p class="small" style="margin:8px 0 0">👉 Сначала укажи, сколько денег у тебя сейчас: ниже, в «⚙ Настройки финансов» → «Сколько денег было на старте». Или просто запиши следующий доход — его и разложим.</p>` : ""}</div>`;
+  }
+  if (e.on && e.unallocated < 0) {
+    html += `<div class="card" style="border-color:var(--bad);margin-top:10px"><b>⚠️ В конвертах больше денег, чем есть на самом деле</b>
+      <p class="small muted" style="margin:6px 0 10px">Разница ${rubR(-e.unallocated)}. Так бывает, если «стартовый баланс» указан неточно или что-то записано мимо конвертов.
+      Поправь стартовый баланс в настройках ниже или пересчитай конверты: деньги вернутся в «неразложенные», и ты разложишь их заново.</p>
+      <button class="btn btn-sm" data-act="envReset">↺ Пересчитать конверты</button></div>`;
   }
   if (e.plan) {
     const p = e.plan;
@@ -76,6 +83,12 @@ function envCard(e) {
   }
   return html;
 }
+actions.envReset = async () => {
+  if (!confirm("Обнулить конверты? Все деньги вернутся в «неразложенные», и их можно будет разложить заново.")) return;
+  await api("POST", "/fin/envelopes/reset");
+  toast("↺ Конверты обнулены — разложи заново");
+  await reFin();
+};
 actions.envApply = async () => {
   const r = await api("POST", "/fin/envelopes/apply", {});
   splash("Разложено", rub(r.amount), "level");
@@ -87,8 +100,10 @@ FIN.home = async () => {
   const [o, e] = await Promise.all([api("GET", "/fin/overview"), api("GET", "/fin/envelopes")]);
   for (const r of e.rewards || []) toast(`💰 ${ddmm(r.day)} в лимите · сэкономил ${rub(r.saved)} · +20 XP`, "ach");
   const lim = e.on ? e.limit : o.daily_limit, spent = e.on ? e.spent_today : o.spent_today;
-  let html = envCard(e) + `<div class="wallet" style="padding-top:12px"><div class="stat-label">Всего свободно</div><div class="wallet-num" style="font-size:34px">${rub(o.balance)}</div>
-      <div class="muted small">месяц: <span style="color:var(--money)">${rub(o.month_in, true)}</span> / −${rub(o.month_out)}</div></div>
+  const inEnv = e.on ? Object.values(e.balances).reduce((a, b) => a + b, 0) : 0;
+  let html = envCard(e) + `<div class="wallet" style="padding-top:12px"><div class="stat-label">На руках</div><div class="wallet-num" style="font-size:34px">${rubR(o.balance)}</div>
+      <div class="muted small">${e.on ? `в конвертах ${rubR(inEnv)} · не разложено ${rubR(e.unallocated)} · ` : ""}месяц: <span style="color:var(--money)">${rubR(o.month_in, true)}</span> / −${rubR(o.month_out)}</div>
+      <div class="muted small">Копилки и деньги на желания сюда не входят — они отложены отдельно.</div></div>
     <form class="row" data-submit="finQuick" style="margin:14px 0">
       <input class="input" name="text" maxlength="100" placeholder="кофе 250 · +5000 монтаж" required>
       <select class="input" name="day" style="width:auto;flex:none" aria-label="Когда">
@@ -157,8 +172,17 @@ actions.finSettings = async form => {
 FIN.env = async () => {
   const e = await api("GET", "/fin/envelopes");
   const st = e.settings, E = e.envs, L = e.learned;
+  const ob = e.obligations;
   let html = envCard(e);
-  html += `<div class="h2">Доли конвертов</div>
+  html += `<div class="h2">📅 Обязательные траты</div>
+    <div class="tiles">
+      <div class="tile"><div class="stat-label">В месяц</div><div class="stat-value">${rubR(ob.month_total)}</div><div class="stat-sub">все платежи</div></div>
+      <div class="tile"><div class="stat-label">Отложено</div><div class="stat-value" style="color:${ob.gap ? "var(--bad)" : "var(--good)"}">${rubR(ob.reserved)}</div>
+        <div class="stat-sub">до ${ddmm(ob.until)} нужно ${rubR(ob.need_now)}${ob.gap ? ` · не хватает ${rubR(ob.gap)}` : " ✓"}</div></div></div>
+    ${ob.items.length ? `<ul class="list-plain card" style="margin-top:8px">${ob.items.map(p => `<li><span>${p.emoji}</span>
+      <div class="q-body">${esc(p.title)}<div class="muted small">${ddmm(p.due)}${p.repeat === "month" ? " · каждый месяц" : p.repeat === "week" ? " · каждую неделю" : " · разово"}${p.due <= ob.until ? " · <b>до следующих денег</b>" : ""}</div></div>
+      <b>${rubR(p.amount)}</b></li>`).join("")}</ul>` : `<div class="empty small" style="margin-top:8px">Платежей нет — добавь во вкладке «Платежи»</div>`}
+    <div class="h2">Доли конвертов</div>
     <form class="card" data-submit="envSettings">
       <div class="row">${["me", "rel", "want"].map(k => `<label class="field" style="flex:1"><span>${E[k].emoji} ${esc(E[k].title)}, %</span>
         <input class="input" name="${k}" type="number" min="0" max="100" value="${st.shares[k]}"></label>`).join("")}</div>
@@ -169,6 +193,9 @@ FIN.env = async () => {
         <label class="field" style="flex:1"><span>🏦 В копилку, %</span><input class="input" name="save" type="number" min="0" max="80" value="${st.save_pct}"></label>
         <label class="field" style="flex:2"><span>Копилка</span><select class="input" name="target">
           ${e.savings.length ? e.savings.map(x => `<option value="${x.id}" ${x.id === st.save_target ? "selected" : ""}>${esc(x.title)}</option>`).join("") : `<option value="0">«Подушка» (создам сам)</option>`}</select></label></div>
+      <label class="field"><span>📅 Что откладывать на обязательное</span><select class="input" name="reserve">
+        <option value="next" ${st.reserve === "next" ? "selected" : ""}>Только то, что наступит до следующих денег</option>
+        <option value="month" ${st.reserve === "month" ? "selected" : ""}>Всё на месяц вперёд (спокойнее, но лимит меньше)</option></select></label>
       <label class="field"><span>Если ожидаемых денег нет — считать лимит на, дней</span><input class="input" name="horizon" type="number" min="3" max="45" value="${st.horizon}"></label>
       <button class="btn btn-accent wide" type="submit">Сохранить</button></form>
 
@@ -197,7 +224,7 @@ actions.envSettings = async form => {
   const shares = { me: Number(form.me.value), rel: Number(form.rel.value), want: Number(form.want.value) };
   if (shares.me + shares.rel + shares.want !== 100) throw new Error("Доли должны в сумме давать 100%");
   await api("PUT", "/fin/envelopes/settings", { shares, save_pct: Number(form.save.value), horizon: Number(form.horizon.value),
-                                                save_target: Number(form.target.value) || 0 });
+                                                save_target: Number(form.target.value) || 0, reserve: form.reserve.value });
   toast("Сохранено");
   await reFin();
 };
@@ -230,6 +257,8 @@ FIN.tx = async () => {
       <div class="row"><input class="input" name="amount" type="number" min="0.01" step="0.01" inputmode="decimal" placeholder="Сумма, ₽" required style="flex:1">
         <input class="input" name="day" type="date" value="${t}" max="${t}" style="width:150px"></div>
       <label class="field" style="margin-top:10px"><span>Категория</span><select class="input" name="category"><option value="">Угадать по описанию</option>${catOpts(k)}</select></label>
+      ${k === "out" ? `<label class="field"><span>Конверт</span><select class="input" name="envelope"><option value="">По категории</option>
+        <option value="me">🧍 Я</option><option value="rel">❤️ Отношения</option><option value="want">🎯 Хотелки</option></select></label>` : ""}
       <label class="field"><span>Описание</span><input class="input" name="note" maxlength="200" placeholder="${k === "in" ? "монтаж ролика" : "кофе"}"></label>
       <button class="btn btn-accent wide" type="submit">Добавить</button></form>
     <div class="row" style="margin-top:14px"><div class="h3" style="margin:0">За ${state.finPeriod} дней</div><span class="spacer"></span>
@@ -242,6 +271,7 @@ actions.txKind = el => { state.txKind = el.dataset.k; return reFin(); };
 actions.finPeriod = el => { state.finPeriod = Number(el.dataset.n); return reFin(); };
 actions.txAdd = async form => {
   await api("POST", "/fin/tx", { kind: state.txKind || "out", amount: Number(form.amount.value), category: form.category.value || null,
+                                 envelope: form.envelope ? form.envelope.value || null : null,
                                  note: form.note.value, day: form.day.value });
   toast("Записано");
   await reFin();
@@ -323,7 +353,13 @@ function planCard(p) {
 FIN.plans = async () => {
   const ps = await api("GET", "/fin/plans");
   const total = ps.filter(p => p.days_left <= 30).reduce((s, p) => s + p.amount, 0);
-  let html = `<p class="muted small">Оплатил — нажми «Оплатил»: трата запишется сама (вне дневного лимита), повторяющийся платёж переедет на следующий срок. Бот напомнит накануне.</p>`;
+  const e = await api("GET", "/fin/envelopes");
+  const ob = e.obligations;
+  let html = `<div class="tiles" style="margin-bottom:10px">
+      <div class="tile"><div class="stat-label">Обязательное в месяц</div><div class="stat-value">${rubR(ob.month_total)}</div></div>
+      <div class="tile"><div class="stat-label">${e.on ? "Отложено в конверте" : "Конверты выключены"}</div><div class="stat-value" style="color:${ob.gap ? "var(--bad)" : "var(--good)"}">${e.on ? rubR(ob.reserved) : "—"}</div>
+        <div class="stat-sub">${e.on ? `до ${ddmm(ob.until)} нужно ${rubR(ob.need_now)}${ob.gap ? ` · не хватает ${rubR(ob.gap)}` : " ✓"}` : ""}</div></div></div>
+    <p class="muted small">Оплатил — нажми «Оплатил»: деньги спишутся из конверта «Обязательное», повторяющийся платёж переедет на следующий срок. Бот напомнит накануне.</p>`;
   if (ps.length) html += `<div class="row small" style="margin-bottom:8px"><span>В ближайшие 30 дней:</span><b>${rub(total)}</b></div>` + ps.map(planCard).join("");
   else html += `<div class="empty small">Платежей нет</div>`;
   html += `<form class="card" data-submit="planAdd" style="margin-top:14px"><div class="h3">＋ Новый платёж</div>
@@ -347,7 +383,9 @@ actions.planDel = async el => { if (confirm("Удалить платёж?")) { a
 // ---------- Желания ----------
 FIN.wishes = async () => {
   const d = await api("GET", "/fin/wishes");
-  let html = `<p class="muted small">Свободно: <b>${rub(d.balance)}</b>. Отложенное на желания не считается свободными деньгами.</p>`;
+  let html = d.env_on
+    ? `<div class="banner money">🎯 В «Хотелках»: <b>${rubR(d.want)}</b> <span class="muted small">— на желания откладываем отсюда</span></div>`
+    : `<p class="muted small">Свободно: <b>${rub(d.balance)}</b>. Отложенное на желания не считается свободными деньгами.</p>`;
   const active = d.wishes.filter(w => !w.done), done = d.wishes.filter(w => w.done);
   html += active.length ? active.map(w => `<div class="card">
       <div class="row"><b style="font-size:17px">🎯 ${esc(w.title)}</b><span class="spacer"></span><b>${w.progress}%</b></div>
@@ -368,7 +406,7 @@ FIN.wishes = async () => {
 };
 actions.wishAdd = async form => { await api("POST", "/fin/wishes", { title: form.title.value, target: Number(form.target.value) }); await reFin(); };
 actions.wishMoney = async el => {
-  const v = prompt(el.dataset.s === "1" ? "Сколько отложить, ₽?" : "Сколько забрать обратно, ₽?");
+  const v = prompt(el.dataset.s === "1" ? "Сколько отложить, ₽? (берём из «Хотелок»)" : "Сколько забрать обратно, ₽? (вернётся в «Хотелки»)");
   if (!v) return;
   await api("POST", `/fin/wishes/${el.dataset.id}/money`, { amount: Number(v.replace(",", ".")) * Number(el.dataset.s) });
   await reFin();
@@ -386,16 +424,22 @@ actions.wishDel = async el => { if (confirm("Удалить желание? От
 FIN.savings = async () => {
   const d = await api("GET", "/fin/savings");
   const total = d.savings.reduce((s, x) => s + x.current, 0);
-  let html = `<div class="wallet" style="padding-top:8px"><div class="stat-label">Накопления и вложения</div><div class="wallet-num">${rub(total)}</div>
-    <div class="muted small">свободно ещё ${rub(d.balance)}</div></div>`;
+  let html = `<div class="wallet" style="padding-top:8px"><div class="stat-label">Накопления и вложения</div><div class="wallet-num">${rubR(total)}</div>
+    <div class="muted small">${d.env_on ? `не разложено ${rubR(d.unallocated)} · пополняй из неразложенных или из конверта` : `свободно ещё ${rub(d.balance)}`}</div></div>`;
   html += d.savings.map(s => `<div class="card">
     <div class="row"><b style="font-size:17px">${s.kind === "invest" ? "📈" : "🏦"} ${esc(s.title)}</b><span class="spacer"></span><b style="font-size:18px">${rub(s.current)}</b></div>
     ${s.kind === "invest" ? `<div class="muted small" style="margin-top:4px">вложено ${rub(s.invested)} · <span style="color:${s.profit >= 0 ? "var(--good)" : "var(--bad)"}">${rub(s.profit, true)}</span>${s.value_day ? ` · оценка от ${ddmm(s.value_day)}` : ""}</div>` : ""}
     <div class="row wrap" style="margin-top:10px">
-      <button class="btn btn-sm btn-accent" data-act="savMove" data-id="${s.id}" data-s="1">＋ Пополнить</button>
+      <button class="btn btn-sm btn-accent" data-act="${d.env_on ? "savOpen" : "savMove"}" data-id="${s.id}" data-s="1">＋ Пополнить</button>
       <button class="btn btn-sm" data-act="savMove" data-id="${s.id}" data-s="-1">− Снять</button>
       ${s.kind === "invest" ? `<button class="btn btn-sm" data-act="savValue" data-id="${s.id}">📊 Стоимость</button>` : ""}
-      <span class="spacer"></span>${s.current === 0 ? `<button class="btn btn-sm btn-ghost" data-act="savDel" data-id="${s.id}" aria-label="Убрать">✕</button>` : ""}</div></div>`).join("") ||
+      <span class="spacer"></span>${s.current === 0 ? `<button class="btn btn-sm btn-ghost" data-act="savDel" data-id="${s.id}" aria-label="Убрать">✕</button>` : ""}</div>
+    ${state.savOpen === s.id ? `<form class="row wrap" data-submit="savDeposit" data-id="${s.id}" style="margin-top:10px">
+      <select class="input" name="src" style="flex:2;min-width:150px">
+        <option value="free">📥 Неразложенные · ${rubR(d.unallocated)}</option>
+        ${["me", "rel", "want", "oblig"].map(k => `<option value="${k}">${{ me: "🧍 Я", rel: "❤️ Отношения", want: "🎯 Хотелки", oblig: "📅 Обязательное" }[k]} · ${rubR(d.balances[k])}</option>`).join("")}</select>
+      <input class="input" name="amount" type="number" min="1" inputmode="decimal" placeholder="₽" required style="flex:1;min-width:80px">
+      <button class="btn btn-accent" type="submit">OK</button></form>` : ""}</div>`).join("") ||
     `<div class="empty small">Копилок нет. Заведи «Подушку» или «Вклад», а для акций и крипты — вложение.</div>`;
   html += `<form class="card" data-submit="savAdd" style="margin-top:14px"><div class="h3">＋ Новая копилка</div>
     <div class="row"><input class="input" name="title" maxlength="60" placeholder="Подушка безопасности" required style="flex:2">
@@ -404,6 +448,13 @@ FIN.savings = async () => {
   return { html };
 };
 actions.savAdd = async form => { await api("POST", "/fin/savings", { title: form.title.value, kind: form.kind.value }); await reFin(); };
+actions.savOpen = el => { const id = Number(el.dataset.id); state.savOpen = state.savOpen === id ? null : id; return reFin(); };
+actions.savDeposit = async form => {
+  await api("POST", `/fin/savings/${form.dataset.id}/move`, { amount: Number(form.amount.value), src: form.src.value });
+  state.savOpen = null;
+  toast("🏦 Пополнено");
+  await reFin();
+};
 actions.savMove = async el => {
   const v = prompt(el.dataset.s === "1" ? "Сколько положить, ₽?" : "Сколько снять, ₽?");
   if (!v) return;
@@ -447,6 +498,11 @@ FIN.stats = async () => {
   const hb = (rows, total) => rows.map(c => `<div class="hbar" data-tip="${esc(`${c.title}: <b>${rub(c.sum)}</b> · ${c.count} опер. · ${total ? Math.round((100 * c.sum) / total) : 0}%`)}">
       <div class="hbar-name">${c.emoji} ${esc(c.title)}</div><div class="hbar-track"><div class="hbar-fill" style="width:${(100 * c.sum) / Math.max(1, rows[0].sum)}%"></div></div>
       <div class="hbar-val" style="width:auto">${rub(c.sum)}</div></div>`).join("");
+  const ENVN = { me: ["🧍", "Я"], rel: ["❤️", "Отношения"], want: ["🎯", "Хотелки"], oblig: ["📅", "Обязательное"] };
+  if (s.by_envelope && s.by_envelope.length) {
+    const envRows = s.by_envelope.map(x => ({ emoji: ENVN[x.envelope][0], title: ENVN[x.envelope][1], sum: x.s, count: x.n }));
+    html += `<div class="h2">По конвертам</div>` + hb(envRows, s.expense);
+  }
   html += `<div class="h2">Куда ушли деньги</div>` + (outs.length ? hb(outs, s.expense) : `<div class="muted small">Трат нет</div>`);
   html += `<div class="h2">Откуда пришли</div>` + (ins.length ? hb(ins, s.income) : `<div class="muted small">Доходов нет</div>`);
   if (s.shifts.length) {

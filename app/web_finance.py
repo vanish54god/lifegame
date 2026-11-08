@@ -20,6 +20,7 @@ class TxIn(BaseModel):
     category: str | None = None
     note: str = Field("", max_length=200)
     day: date | None = None
+    envelope: str | None = None
 
 class QuickIn(BaseModel):
     text: str = Field(max_length=100)
@@ -43,6 +44,7 @@ class EnvSettings(BaseModel):
     save_pct: int | None = Field(None, ge=0, le=80)
     save_target: int | None = None
     horizon: int | None = Field(None, ge=3, le=45)
+    reserve: str | None = None
 
 class ExpectedIn(BaseModel):
     title: str = Field(max_length=60)
@@ -85,6 +87,7 @@ class WishIn(BaseModel):
 
 class MoneyIn(BaseModel):
     amount: float = Field(gt=-MAX_RUB, lt=MAX_RUB)
+    src: str | None = None          # откуда берём: free / me / rel / want / oblig
 
 class SavingIn(BaseModel):
     title: str = Field(max_length=60)
@@ -122,7 +125,10 @@ def add_finance_routes(app: FastAPI, game, today, require_auth) -> None:
         if body.day and body.day > today():
             from .finance import FinError
             raise FinError("Нельзя записать трату в будущее")
-        return fin.add_tx(body.day or today(), body.kind, k(body.amount), body.category, body.note)
+        t = fin.add_tx(body.day or today(), body.kind, k(body.amount), body.category, body.note)
+        if body.envelope and t["kind"] == "out":
+            t = game.env.set_tx_envelope(t["id"], body.envelope)
+        return t
 
     @app.post("/api/fin/quick", dependencies=auth)
     async def quick(body: QuickIn):
@@ -164,7 +170,11 @@ def add_finance_routes(app: FastAPI, game, today, require_auth) -> None:
                 "learned": env.learned_shares(t), "envs": {k: {"emoji": e, "title": n} for k, (e, n) in ENVS.items()},
                 "plan": env.plan(b["unallocated"], t) if b["unallocated"] > 0 else None,
                 "savings": [{"id": x["id"], "title": x["title"]} for x in fin.savings()],
-                "streak": env.limit_streak(t)}
+                "streak": env.limit_streak(t), "obligations": env.obligations(t)}
+
+    @app.post("/api/fin/envelopes/reset", dependencies=auth)
+    async def env_reset():
+        return game.env.reset(today())
 
     @app.post("/api/fin/envelopes/apply", dependencies=auth)
     async def env_apply(body: EnvApply):
@@ -178,7 +188,7 @@ def add_finance_routes(app: FastAPI, game, today, require_auth) -> None:
 
     @app.put("/api/fin/envelopes/settings", dependencies=auth)
     async def env_settings(body: EnvSettings):
-        st = game.env.save_settings(body.shares, body.save_pct, body.save_target, body.horizon)
+        st = game.env.save_settings(body.shares, body.save_pct, body.save_target, body.horizon, body.reserve)
         game.env.refresh_today(today())
         return st
 
@@ -256,7 +266,9 @@ def add_finance_routes(app: FastAPI, game, today, require_auth) -> None:
 
     @app.get("/api/fin/wishes", dependencies=auth)
     async def wishes():
-        return {"wishes": fin.wishes(), "balance": fin.balance()}
+        env = game.env
+        return {"wishes": fin.wishes(), "balance": fin.balance(), "env_on": env.on,
+                "want": env.balance("want") if env.on else None}
 
     @app.post("/api/fin/wishes", dependencies=auth)
     async def add_wish(body: WishIn):
@@ -264,7 +276,7 @@ def add_finance_routes(app: FastAPI, game, today, require_auth) -> None:
 
     @app.post("/api/fin/wishes/{wid}/money", dependencies=auth)
     async def wish_money(wid: int, body: MoneyIn):
-        return fin.wish_add_money(wid, k(body.amount), today())
+        return fin.wish_add_money(wid, k(body.amount), today(), body.src or "want")
 
     @app.post("/api/fin/wishes/{wid}/done", dependencies=auth)
     async def wish_done(wid: int):
@@ -282,7 +294,10 @@ def add_finance_routes(app: FastAPI, game, today, require_auth) -> None:
 
     @app.get("/api/fin/savings", dependencies=auth)
     async def savings():
-        return {"savings": fin.savings(), "balance": fin.balance()}
+        env = game.env
+        return {"savings": fin.savings(), "balance": fin.balance(), "env_on": env.on,
+                "unallocated": env.unallocated() if env.on else None,
+                "balances": env.balances() if env.on else None}
 
     @app.post("/api/fin/savings", dependencies=auth)
     async def add_saving(body: SavingIn):
@@ -290,7 +305,10 @@ def add_finance_routes(app: FastAPI, game, today, require_auth) -> None:
 
     @app.post("/api/fin/savings/{sid}/move", dependencies=auth)
     async def saving_move(sid: int, body: MoneyIn):
-        return fin.saving_move(sid, k(body.amount), today())
+        src = body.src if body.src else ("free" if game.env.on else None)
+        r = fin.saving_move(sid, k(body.amount), today(), src)
+        game.env.refresh_today(today())
+        return r
 
     @app.post("/api/fin/savings/{sid}/value", dependencies=auth)
     async def saving_value(sid: int, body: MoneyIn):

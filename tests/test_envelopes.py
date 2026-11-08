@@ -191,3 +191,66 @@ def test_static_no_cache():
     c = TestClient(create_app(Config("1:x", 42, ":memory:", 5, ZoneInfo("Europe/Moscow")), Game(conn), Auth(conn)))
     assert c.get("/app.js").headers["cache-control"] == "no-cache"
     assert c.get("/finance.js").headers["cache-control"] == "no-cache"
+
+
+def setup_env(game, amount=1000000):
+    game.fin.add_tx(T, "in", amount, note="+")
+    game.env.apply(amount, T)
+
+
+def test_wish_money_from_want(game):
+    f, e = game.fin, game.env
+    setup_env(game)                                       # хотелки: 20% от 9 000 = 1 800 ₽
+    w = f.add_wish("Наушники", 500000, T)
+    f.wish_add_money(w["id"], 100000, T)
+    assert e.balance("want") == 180000 - 100000
+    assert e.unallocated() == 0                            # ничего не «уехало» мимо конвертов
+    with pytest.raises(Exception, match="Хотелки"):
+        f.wish_add_money(w["id"], 500000, T)               # в хотелках столько нет
+    f.wish_add_money(w["id"], -40000, T)                   # забрал часть — вернулось в хотелки
+    assert e.balance("want") == 120000
+    f.delete_wish(w["id"], T)                              # удалил желание — всё отложенное вернулось
+    assert e.balance("want") == 180000 and e.unallocated() == 0
+
+
+def test_saving_from_envelope_or_free(game):
+    f, e = game.fin, game.env
+    setup_env(game)
+    sid = f.savings()[0]["id"]
+    f.saving_move(sid, 50000, T, "me")
+    assert e.balance("me") == 360000 - 50000 and e.unallocated() == 0
+    with pytest.raises(Exception, match="Неразложенных"):
+        f.saving_move(sid, 1000, T, "free")
+    f.saving_move(sid, -30000, T)                           # снял — деньги в неразложенные
+    assert e.unallocated() == 30000
+
+
+def test_obligations_and_reserve_mode(game):
+    f, e = game.fin, game.env
+    e.add_expected("Карманные", 500000, T + timedelta(days=5), "month")
+    f.add_plan("Проездной", 210000, T + timedelta(days=2), "month")
+    f.add_plan("VPS", 50000, T + timedelta(days=20), "month")
+    ob = e.obligations(T)
+    assert ob["month_total"] == 260000 and ob["need_now"] == 210000
+    assert e.plan(1000000, T)["oblig"] == 210000            # до следующих денег — только проездной
+    e.save_settings(reserve="month")
+    assert e.plan(1000000, T)["oblig"] == 260000            # на месяц вперёд — оба
+    assert e.obligations(T)["need_now"] == 260000
+
+
+def test_reset(game):
+    f, e = game.fin, game.env
+    setup_env(game)
+    f.save_settings(start_balance=-500000)                  # «стартовый баланс» указан неверно
+    assert e.unallocated() < 0
+    e.reset(T)
+    assert all(v == 0 for v in e.balances().values()) and e.unallocated() == f.balance()
+
+
+def test_stats_by_envelope(game):
+    f = game.fin
+    setup_env(game)
+    f.add_tx(T, "out", 30000, note="кофе")
+    f.add_tx(T, "out", 10000, note="кола")
+    st = f.stats(T, T)
+    assert {x["envelope"]: x["s"] for x in st["by_envelope"]} == {"rel": 30000, "me": 10000}

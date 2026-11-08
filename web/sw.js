@@ -1,5 +1,5 @@
 /* Service worker: приложение открывается даже без сети (данные — только онлайн). */
-const CACHE = "lifegame-v6";
+const CACHE = "lifegame-v7";
 const SHELL = ["/", "/app.js", "/finance.js", "/planner.js", "/style.css", "/manifest.webmanifest",
                "/icons/icon-192.png", "/icons/apple-touch-icon.png"];
 

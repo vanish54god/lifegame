@@ -51,7 +51,8 @@ OUT_CATS = [
 IN_CATS = [
     Cat("salary", "Зарплата", "💼", ("зарплат", "зп", "аванс", "смен", "оплат")),
     Cat("freelance", "Фриланс", "🎬", ("трансляц", "монтаж", "съёмк", "съемк", "фриланс", "заказ", "vmix")),
-    Cat("gift_in", "Подарок", "🎁", ("подар", "мама", "папа", "родител", "бабушк")),
+    Cat("allowance", "Карманные", "👪", ("карман", "родител", "мама", "папа", "стипенд")),
+    Cat("gift_in", "Подарок", "🎁", ("подар", "бабушк", "дедушк")),
     Cat("other_in", "Другое", "💵", ()),
 ]
 CATS = {c.key: c for c in OUT_CATS + IN_CATS}
@@ -573,8 +574,33 @@ class Finance:
         q = "SELECT id FROM wishes" + ("" if include_done else " WHERE done = 0") + " ORDER BY done, id"
         return [self.wish(r["id"]) for r in self.conn.execute(q)]
 
-    def wish_add_money(self, wid: int, amount: int, day: date) -> dict:
-        """Отложить на желание (минус — забрать обратно)."""
+    # ---------- связь с конвертами ----------
+
+    def _env_on(self) -> bool:
+        return bool(self.game and getattr(self.game, "env", None) and self.game.env.on)
+
+    def _env_take(self, src: str, amount: int, day: date, what: str) -> None:
+        """Забрать деньги из конверта (или из неразложенных) — с проверкой, что они там есть."""
+        env = self.game.env
+        from .envelopes import ENVS
+        if src == "free":
+            if amount > env.unallocated():
+                raise FinError(f"Неразложенных денег только {rub(max(0, env.unallocated()))} — возьми из конверта")
+            return
+        if src not in ENVS:
+            raise FinError("Неизвестный конверт")
+        if amount > env.balance(src):
+            raise FinError(f"В конверте «{ENVS[src][1]}» только {rub(max(0, env.balance(src)))} — переложи из другого")
+        self.conn.execute("INSERT INTO env_moves (day, env, amount, note) VALUES (?, ?, ?, ?)",
+                          (day.isoformat(), src, -amount, what))
+
+    def _env_give(self, dst: str, amount: int, day: date, what: str) -> None:
+        if dst != "free":
+            self.conn.execute("INSERT INTO env_moves (day, env, amount, note) VALUES (?, ?, ?, ?)",
+                              (day.isoformat(), dst, amount, what))
+
+    def wish_add_money(self, wid: int, amount: int, day: date, src: str = "want") -> dict:
+        """Отложить на желание (минус — забрать обратно). С конвертами деньги берутся из «Хотелок»."""
         w = self.wish(wid)
         if w["done"]:
             raise FinError("Желание уже исполнено")
@@ -582,6 +608,11 @@ class Finance:
             raise FinError("Сумма не может быть нулём")
         if amount < 0 and -amount > w["saved"]:
             raise FinError(f"Отложено только {rub(w['saved'])}")
+        if self._env_on():
+            if amount > 0:
+                self._env_take(src, amount, day, f"на желание: {w['title']}")
+            else:
+                self._env_give("want", -amount, day, f"с желания: {w['title']}")
         self.add_tx(day, "move", amount, None, w["title"], in_limit=False, source="wish", ref_id=wid)
         return self.wish(wid)
 
@@ -601,6 +632,8 @@ class Finance:
     def delete_wish(self, wid: int, day: date) -> None:
         w = self.wish(wid)
         if w["saved"] > 0 and not w["done"]:
+            if self._env_on():
+                self._env_give("want", w["saved"], day, f"с желания: {w['title']}")
             self.add_tx(day, "move", -w["saved"], None, w["title"], in_limit=False, source="wish", ref_id=wid)
         self.conn.execute("DELETE FROM wishes WHERE id = ?", (wid,))
         self.conn.commit()
@@ -633,13 +666,16 @@ class Finance:
         return [self.saving(r["id"]) for r in self.conn.execute(
             "SELECT id FROM savings WHERE archived = 0 ORDER BY kind, id")]
 
-    def saving_move(self, sid: int, amount: int, day: date) -> dict:
-        """Пополнить (плюс) или снять (минус)."""
+    def saving_move(self, sid: int, amount: int, day: date, src: str | None = None) -> dict:
+        """Пополнить (плюс) или снять (минус).
+        src — откуда берём при пополнении: 'free' (неразложенные) или конверт. Снятое возвращается в неразложенные."""
         s = self.saving(sid)
         if amount == 0:
             raise FinError("Сумма не может быть нулём")
         if amount < 0 and -amount > s["current"]:
             raise FinError(f"Там только {rub(s['current'])}")
+        if src is not None and self._env_on() and amount > 0:
+            self._env_take(src, amount, day, f"в копилку: {s['title']}")
         self.add_tx(day, "move", amount, None, s["title"], in_limit=False, source="saving", ref_id=sid)
         if s["kind"] == "invest" and s["value"] is not None:
             self.conn.execute("UPDATE savings SET value = value + ? WHERE id = ?", (amount, sid))
@@ -715,6 +751,9 @@ class Finance:
             x = daily.get(d.isoformat(), {"in": 0, "out": 0})
             days.append({"day": d.isoformat(), "in": x["in"], "out": x["out"]})
             d += timedelta(days=1)
+        by_env = [dict(r) for r in self.conn.execute("""SELECT envelope, SUM(amount) s, COUNT(*) n FROM fin_tx
+                WHERE kind='out' AND envelope IS NOT NULL AND day BETWEEN ? AND ? GROUP BY envelope ORDER BY s DESC""",
+                                                   (start.isoformat(), end.isoformat()))]
         sh = self.conn.execute("""SELECT company, COUNT(*) n, SUM(amount) s, COALESCE(SUM(hours),0) h FROM shifts
                 WHERE day BETWEEN ? AND ? GROUP BY company ORDER BY s DESC""",
                                (start.isoformat(), end.isoformat())).fetchall()
@@ -724,7 +763,7 @@ class Finance:
             "start": start.isoformat(), "end": end.isoformat(), **tot,
             "net": tot["income"] - tot["expense"],
             "avg_day_out": round(tot["expense"] / n_days),
-            "by_category": by_cat, "days": days,
+            "by_category": by_cat, "days": days, "by_envelope": by_env,
             "shifts": [dict(r) for r in sh],
             "shifts_total": sum(r["s"] for r in sh),
             "days_with_spending": limit_days,

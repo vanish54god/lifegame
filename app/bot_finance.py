@@ -179,8 +179,10 @@ class FinUI:
                 lines.append(f"🔮 К следующим деньгам останется ~<b>{rubr(fc)}</b>")
             else:
                 lines.append(f"⚠️ В текущем темпе не хватит <b>{rubr(-fc)}</b> — притормози")
+            lines.append(f"📅 Обязательное: отложено {rubr(b['oblig'])} · до следующих денег нужно {rubr(b['oblig_need'])}"
+                         f" · в месяц ~{rubr(b['oblig_month'])}")
             if b["oblig"] < b["oblig_need"]:
-                lines.append(f"📅 На обязательное не хватает {rub(b['oblig_need'] - b['oblig'])}")
+                lines.append(f"⚠️ На обязательное не хватает {rubr(b['oblig_need'] - b['oblig'])}")
             if b["unallocated"] > 0:
                 lines.append(f"\n📥 Не разложено: <b>{rub(b['unallocated'])}</b>")
                 rows.append([Btn(text="💌 Разложить", callback_data="env:prop")])
@@ -282,7 +284,10 @@ class FinUI:
             lines.append(f"<b>{escape(w['title'])}</b>\n{progress_bar(w['saved'], w['target'], 10)} "
                          f"{rub(w['saved'])} / {rub(w['target'])} ({w['progress']}%)")
             rows.append([Btn(text=f"➕ Отложить: {short(w['title'], 22)}", callback_data=f"fin:wadd:{w['id']}")])
-        lines.append(f"\nСвободно: {rub(self.fin.balance())}")
+        if self.game.env.on:
+            lines.append(f"\n🎯 В «Хотелках»: {rubr(self.game.env.balance('want'))} — откладываем отсюда")
+        else:
+            lines.append(f"\nСвободно: {rub(self.fin.balance())}")
         rows.append([Btn(text="⬅️ Деньги", callback_data="env:money")])
         return "\n".join(lines), kb(*rows)
 
@@ -624,8 +629,9 @@ def register_finance(router: Router, ui, edit, celebrate, main_kb) -> FinUI:
         await state.set_state(WishAmount.amount)
         await state.update_data(wid=wid)
         await cb.answer()
-        await cb.message.answer(f"🎯 Сколько отложить на «{escape(w['title'])}»? Напиши сумму, например <code>2000</code>.\n"
-                                f"Свободно: {rub(fin.balance())}")
+        src = (f"В «Хотелках»: {rubr(ui.game.env.balance('want'))}" if ui.game.env.on
+               else f"Свободно: {rub(fin.balance())}")
+        await cb.message.answer(f"🎯 Сколько отложить на «{escape(w['title'])}»? Напиши сумму, например <code>2000</code>.\n{src}")
 
     @router.message(WishAmount.amount, F.text)
     async def wish_amount(msg: Message, state: FSMContext):
