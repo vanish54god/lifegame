@@ -199,6 +199,14 @@ def add_finance_routes(app: FastAPI, game, today, require_auth) -> None:
                 "savings": [{"id": x["id"], "title": x["title"]} for x in fin.savings()],
                 "streak": env.limit_streak(t), "obligations": env.obligations(t)}
 
+    @app.get("/api/fin/envelopes/redistribute", dependencies=auth)
+    async def env_redis_preview():
+        return game.env.redistribute(today())
+
+    @app.post("/api/fin/envelopes/redistribute", dependencies=auth)
+    async def env_redis():
+        return _with_ach(lambda: game.env.redistribute(today(), do=True))
+
     @app.post("/api/fin/envelopes/reset", dependencies=auth)
     async def env_reset():
         return game.env.reset(today())

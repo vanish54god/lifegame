@@ -242,3 +242,23 @@ def test_half_year_goal_is_single_payment(game):
     it = item(game, f"p{p['id']}")
     assert it["goal"] == 300000 and it["status"] == "progress"
     assert e.obligations(T)["month_total"] == 50000                      # 3000 / 6 мес
+
+
+def test_redistribute_everything_after_new_payments(game):
+    f, e = game.fin, game.env
+    income(game, 1000000)                                              # платежей нет — всё по конвертам
+    assert e.balance("oblig") == 0
+    p = f.add_plan("Проездной", 210000, T + timedelta(days=3), "month")
+    fd = e.ob.add_fund("ДР Сони", 300000, T + timedelta(days=30), T)
+    saved = sum(s["current"] for s in f.savings())
+    before = e.balances()
+    pr = e.redistribute(T)                                             # только показать
+    assert e.balances() == before
+    assert pr["total"] == sum(before.values()) + e.unallocated()
+    assert next(i for i in pr["items"] if i["slot"] == f"p{p['id']}")["after"] >= 210000
+    r = e.redistribute(T, do=True)
+    assert item(game, f"p{p['id']}")["status"] in ("ok", "double")
+    assert item(game, fd["slot"])["balance"] > 0
+    assert sum(e.balances().values()) == pr["total"] and e.unallocated() == 0   # ни копейки не потерялось
+    assert sum(s["current"] for s in f.savings()) == saved                      # копилки не тронуты
+    assert r["obligations"]["gap"] == 0

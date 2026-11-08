@@ -250,6 +250,44 @@ class Envelopes:
         self.refresh_today(today)
         return self.balances()
 
+    def redistribute(self, today: date, do: bool = False) -> dict:
+        """🔄 Разложить заново ВСЕ деньги из конвертов и ячеек — как будто они только что пришли.
+        Копилки не трогаем и в копилку не откладываем (это уже сделано). do=False — только показать «было → станет»."""
+        st = self.settings()
+        self.ob.tick(today)
+        bal = self.balances()
+        free = self.unallocated()
+        total = free + sum(bal.values())
+        if total <= 0:
+            raise EnvError("Нечего перераспределять — в конвертах пусто")
+        slots_before = self.ob.balances()
+        items = self.ob.items(today, bal={})                 # как будто во всех ячейках пусто
+        al = self.ob.allocate(total, today, ahead_cap=round(total * st["ahead_pct"] / 100), items=items)
+        oblig = sum(al["slots"].values())
+        rest = total - oblig
+        parts = {k: rest * st["shares"][k] // 100 for k in SPEND_ENVS}
+        parts["me"] += rest - sum(parts.values())
+        after = {"oblig": oblig, **parts, "free": 0}
+        before = {**bal, "free": free}
+        lines = [{"slot": i["slot"], "title": i["title"], "emoji": i["emoji"], "before": slots_before.get(i["slot"], 0),
+                  "after": al["slots"].get(i["slot"], 0)} for i in items]
+        res = {"total": total, "before": before, "after": after, "items": lines, "buffer_before": slots_before.get(None, 0),
+               "funds_short": al["short"], "now": al["now"], "funds": al["funds"], "sched": al["sched"],
+               "ahead": al["ahead"]}
+        if not do:
+            return res
+        self.reset(today)
+        for slot, x in al["slots"].items():
+            self.ob._ins("oblig", slot, x, today, "перераспределение")
+        for env in SPEND_ENVS:
+            if parts[env]:
+                self.conn.execute("INSERT INTO env_moves (day, env, amount, note) VALUES (?, ?, ?, 'перераспределение')",
+                                  (today.isoformat(), env, parts[env]))
+        self.g.set_setting("env_on", "1")
+        self.conn.commit()
+        self.refresh_today(today)
+        return {**res, "balances": self.balances(), "obligations": self.obligations(today)}
+
     def move(self, src: str, dst: str, amount: int, today: date) -> dict:
         """Переложить между конвертами; dst='save' — отправить в копилку."""
         if amount <= 0:

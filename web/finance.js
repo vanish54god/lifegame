@@ -70,7 +70,9 @@ function envCard(e) {
       ${obLine(e)}
       <div class="env-row">${["oblig", "me", "rel", "want"].map(k => `<div class="env"><span>${E[k].emoji}</span><b>${rubR(e.balances[k])}</b><span class="muted">${esc(E[k].title)}</span></div>`).join("")}</div>
       ${e.saved_month > 0 ? `<div class="small muted" style="margin-top:6px">🏦 В копилку за месяц: ${rubR(e.saved_month)}</div>` : ""}
+      <button class="btn btn-sm wide" data-act="redisShow" style="margin-top:10px">🔄 Перераспределить всё</button>
     </div>`;
+    html += redisCard();
   } else {
     html += `<div class="budget-card"><div class="h3" style="color:var(--ink)">💌 Конверты</div>
       <p class="small muted" style="margin:4px 0 0">Пришли деньги → сначала 📅 обязательные платежи, потом 🏦 копилка, остальное по конвертам 🧍 Я · ❤️ Отношения · 🎯 Хотелки.
@@ -93,6 +95,34 @@ function envCard(e) {
   }
   return html;
 }
+// ---------- 🔄 перераспределить всё заново ----------
+function redisCard() {
+  const r = state.redis;
+  if (!r) return "";
+  const row = (emoji, title, a, b) => `<div class="row small" style="padding:3px 0"><span>${emoji}</span><span>${esc(title)}</span><span class="spacer"></span>
+    <span class="muted">${rubR(a)}</span><span>→</span><b style="min-width:70px;text-align:right;color:${b > a ? "var(--good)" : b < a ? "var(--accent)" : "var(--ink)"}">${rubR(b)}</b></div>`;
+  return `<div class="card" style="border-color:var(--accent);margin-top:10px">
+    <b>🔄 Разложить заново ${rubR(r.total)}</b>
+    <p class="small muted" style="margin:4px 0 8px">Все деньги из конвертов и ячеек — как будто только что пришли: сначала платежи до следующих денег, потом фонды и далёкие платежи по графику, 10% вперёд, остальное по долям. Копилки не трогаю.</p>
+    ${r.items.map(i => row(i.emoji, i.title, i.before, i.after)).join("")}
+    ${r.buffer_before ? row("📅", "Общий запас", r.buffer_before, 0) : ""}
+    <div style="border-top:1px solid var(--line);margin:6px 0"></div>
+    ${row("🧍", "Я", r.before.me, r.after.me)}${row("❤️", "Отношения", r.before.rel, r.after.rel)}${row("🎯", "Хотелки", r.before.want, r.after.want)}
+    ${r.before.free ? row("📥", "Не разложено", r.before.free, 0) : ""}
+    ${r.funds_short ? `<div class="small muted" style="margin-top:6px">🎁 Фондам и далёким платежам недодам ${rubR(r.funds_short)} — чтобы осталось на жизнь.</div>` : ""}
+    <div class="row" style="gap:8px;margin-top:10px"><button class="btn btn-accent" style="flex:1" data-act="redisApply">✅ Применить</button>
+      <button class="btn" data-act="redisCancel">Отмена</button></div></div>`;
+}
+actions.redisShow = async () => { state.redis = await api("GET", "/fin/envelopes/redistribute"); await reFin(); };
+actions.redisCancel = () => { state.redis = null; return reFin(); };
+actions.redisApply = async () => {
+  const r = await api("POST", "/fin/envelopes/redistribute");
+  state.redis = null;
+  toast(`🔄 Готово · под контролем ${r.obligations.green} из ${r.obligations.total}`);
+  celebrate(r);
+  await reFin();
+};
+
 actions.envReset = async () => {
   if (!confirm("Обнулить конверты? Все деньги вернутся в «неразложенные», и их можно будет разложить заново.")) return;
   await api("POST", "/fin/envelopes/reset");
@@ -421,6 +451,7 @@ FIN.plans = async () => {
         <div class="stat-sub">${ob.double ? `🛡 ${ob.double} с двойным запасом` : ob.total ? "зелёные — можно не думать" : "добавь первый платёж"}</div></div>
       <div class="tile"><div class="stat-label">Отложено</div><div class="stat-value">${rubR(ob.reserved)}</div>
         <div class="stat-sub">${ob.gap ? `<span style="color:var(--bad)">до ${ddmm(ob.until)} не хватает ${rubR(ob.gap)}</span>` : `в месяц ~${rubR(ob.month_total)}`}</div></div></div>`;
+  html += state.redis ? redisCard() : (e.on ? `<button class="btn btn-sm wide" data-act="redisShow" style="margin-bottom:10px">🔄 Перераспределить всё под текущие платежи</button>` : "");
   if (!e.on) html += `<div class="banner hot small">💌 Конверты ещё не включены — разложи деньги на «Обзоре», и бот начнёт сам откладывать на каждый платёж.</div>`;
   html += `<p class="muted small">С каждых денег бот сам закрывает платежи до следующих денег, кладёт в 🎁 фонды их долю по графику и ещё ${ob.ahead_pct}% — на следующие платежи (пока всё не будет с двойным запасом). Оплатил — жми «Оплатил», деньги спишутся из ячейки платежа.</p>`;
   html += ob.items.length ? ob.items.map(i => obCard(i, e)).join("") : `<div class="empty small">Пусто. Добавь проездной, связь, подписки — и фонды на праздники.</div>`;

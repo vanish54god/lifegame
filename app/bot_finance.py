@@ -257,8 +257,30 @@ class FinUI:
         if un > 0:
             rows.append([Btn(text=f"💌 Разложить {rub(un)}", callback_data="env:prop")])
         rows.append([Btn(text="↔️ Переложить", callback_data="env:mv"), Btn(text="🏦 В копилку", callback_data="env:sv")])
+        if env.on:
+            rows.append([Btn(text="🔄 Перераспределить всё", callback_data="env:redis")])
         rows.append([Btn(text="⬅️ Деньги", callback_data="env:money")])
         return "\n".join(lines), kb(*rows)
+
+    def redis_preview(self) -> tuple[str, InlineKeyboardMarkup]:
+        r = self.game.env.redistribute(self.ui.today())
+        arrow = lambda a, b: f"{rubr(a)} → <b>{rubr(b)}</b>"
+        lines = [f"🔄 <b>Разложить заново {rubr(r['total'])}</b>",
+                 "<i>Все деньги из конвертов и ячеек — как будто только что пришли. Копилки не трогаю.</i>", ""]
+        for i in r["items"]:
+            if i["before"] or i["after"]:
+                lines.append(f"{i['emoji']} {escape(i['title'])}: {arrow(i['before'], i['after'])}")
+        if r["buffer_before"]:
+            lines.append(f"📅 Общий запас: {arrow(r['buffer_before'], 0)}")
+        lines.append("")
+        for k in SPEND_ENVS:
+            lines.append(f"{ENVS[k][0]} {ENVS[k][1]}: {arrow(r['before'][k], r['after'][k])}")
+        if r["before"]["free"]:
+            lines.append(f"📥 Не разложено: {arrow(r['before']['free'], 0)}")
+        if r["funds_short"]:
+            lines.append(f"\n<i>🎁 Фондам и далёким платежам недодам {rubr(r['funds_short'])} — чтобы осталось на жизнь</i>")
+        return "\n".join(lines), kb([Btn(text="✅ Применить", callback_data="env:redo"),
+                                     Btn(text="Отмена", callback_data="env:list")])
 
     def proposal(self, amount: int, title: str = "") -> tuple[str, InlineKeyboardMarkup] | None:
         env = self.game.env
@@ -349,6 +371,8 @@ class FinUI:
                          else f"Под контролем: <b>{ob['green']} из {ob['total']}</b> · отложено {rubr(ob['reserved'])}")
             lines.append(f"<i>С каждых денег бот сам закрывает платежи до следующих денег, кормит фонды по графику "
                          f"и кладёт {ob['ahead_pct']}% на следующий раз.</i>")
+        if env.on and ob["items"]:
+            rows.append([Btn(text="🔄 Перераспределить всё", callback_data="env:redis")])
         rows.append([Btn(text="🎁 Новый фонд", callback_data="ob:fund"), Btn(text="⬅️ Деньги", callback_data="env:money")])
         return "\n".join(lines), kb(*rows)
 
@@ -998,5 +1022,28 @@ def register_finance(router: Router, ui, edit, celebrate, main_kb) -> FinUI:
                        f"Буду откладывать ~{rubr(it['per_week'])} в неделю — с каждых денег сам. "
                        f"За 2 недели закину в банк задачу «выбрать и купить».",
                    kb([Btn(text="📅 Обязательное", callback_data="fin:plans")]))
+
+    @router.callback_query(F.data == "env:redis")
+    async def env_redis(cb: CallbackQuery):
+        try:
+            text, markup = fu.redis_preview()
+        except (EnvError, FinError) as e:
+            return await fin_err(cb, e)
+        await cb.answer()
+        await edit(cb, text, markup)
+
+    @router.callback_query(F.data == "env:redo")
+    async def env_redo(cb: CallbackQuery):
+        before = ui.game._achieved(ui.today())
+        try:
+            r = ui.game.env.redistribute(ui.today(), do=True)
+        except (EnvError, FinError) as e:
+            return await fin_err(cb, e)
+        ob = r["obligations"]
+        await cb.answer(f"🔄 Готово · под контролем {ob['green']} из {ob['total']}")
+        text, markup = fu.plans()
+        await edit(cb, "🔄 Разложил заново\n\n" + text, markup)
+        new = [a for a in ui.game.full_stats(ui.today())["achievements"] if a["done"] and a["key"] not in before]
+        await celebrate(cb.message, {"level_before": 0, "level_after": 0, "new_achievements": new})
 
     return fu
