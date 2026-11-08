@@ -58,6 +58,13 @@ class FundIn(BaseModel):
     repeat: str = "none"
     remind: bool = True
 
+class PlanPatch(BaseModel):
+    title: str | None = Field(None, max_length=100)
+    amount: float | None = Field(None, gt=0, lt=MAX_RUB)
+    due: date | None = None
+    repeat: str | None = None
+    category: str | None = None
+
 class FundPatch(BaseModel):
     title: str | None = Field(None, max_length=60)
     target: float | None = Field(None, gt=0, lt=MAX_RUB)
@@ -272,7 +279,14 @@ def add_finance_routes(app: FastAPI, game, today, require_auth) -> None:
 
     @app.post("/api/fin/plans", dependencies=auth)
     async def add_plan(body: PlanIn):
-        p = fin.add_plan(body.title, k(body.amount), body.due, body.repeat, body.category)
+        p = fin.add_plan(body.title, k(body.amount), body.due, body.repeat, body.category, today())
+        if game.env.on:
+            game.env.ob.distribute(today())
+        return p
+
+    @app.patch("/api/fin/plans/{pid}", dependencies=auth)
+    async def patch_plan(pid: int, body: PlanPatch):
+        p = fin.edit_plan(pid, body.title, k(body.amount), body.due, body.repeat, body.category)
         if game.env.on:
             game.env.ob.distribute(today())
         return p

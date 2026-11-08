@@ -214,3 +214,31 @@ def test_funds_and_ahead_leave_money_for_life(game):
     assert p["oblig_now"] == 210000                                     # срочный платёж — целиком
     assert p["funds"] + p["ahead"] <= (900000 - 210000) // 2            # остальным — не больше половины
     assert p["funds_short"] > 0 and p["me"] > 0
+
+
+def test_quarterly_payment_saves_by_schedule_and_flags_behind(game):
+    f, e = game.fin, game.env
+    # проездной раз в 3 месяца, платить через 38 дней, а отложено 0 — уже отстаём от графика
+    p = f.add_plan("Проездной", 900000, T + timedelta(days=38), "month3", "transport", today=T - timedelta(days=52))
+    it = item(game, f"p{p['id']}")
+    assert it["status"] == "late" and not it["now"] and it["behind"] > 0
+    assert it["need"] == 900000 * 7 // 38 // 100 * 100 + 100            # догоняем: 7 дней из 38
+    ob = e.obligations(T)
+    assert ob["gap"] == 0 and ob["behind"] == it["behind"]               # не срочно, но красное
+    income(game, 1000000)
+    assert item(game, f"p{p['id']}")["balance"] >= it["need"]
+    # оплатил — следующий через 3 месяца, копим с нуля и это не «отстаём»
+    f.add_tx(T, "in", 1000000)
+    e.ob.put(f"p{p['id']}", 900000 - item(game, f"p{p['id']}")["balance"], "free", T)
+    f.pay_plan(p["id"], T + timedelta(days=38))
+    nxt = f.plan(p["id"])
+    assert nxt["due"] == "2027-03-16"
+    assert item(game, f"p{p['id']}", T + timedelta(days=38))["status"] == "progress"
+
+
+def test_half_year_goal_is_single_payment(game):
+    f, e = game.fin, game.env
+    p = f.add_plan("VPN", 300000, T + timedelta(days=100), "month6", "subs", today=T)
+    it = item(game, f"p{p['id']}")
+    assert it["goal"] == 300000 and it["status"] == "progress"
+    assert e.obligations(T)["month_total"] == 50000                      # 3000 / 6 мес

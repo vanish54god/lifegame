@@ -141,6 +141,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE fin_tx ADD COLUMN envelope TEXT")
     if "slot" not in tcols:
         conn.execute("ALTER TABLE fin_tx ADD COLUMN slot TEXT")
+    if "start_day" not in _columns(conn, "planned"):
+        conn.execute("ALTER TABLE planned ADD COLUMN start_day TEXT")
     if "slot" not in _columns(conn, "env_moves"):
         conn.execute("ALTER TABLE env_moves ADD COLUMN slot TEXT")
     if "est_min" not in _columns(conn, "templates"):

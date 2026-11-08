@@ -13,6 +13,13 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
 
+
+# Повтор обязательных платежей: сколько месяцев между оплатами
+PLAN_MONTHS = {"month": 1, "month3": 3, "month6": 6, "year": 12}
+PLAN_REPEATS = ("none", "week", *PLAN_MONTHS)
+REPEAT_TITLE = {"none": "разово", "week": "каждую неделю", "month": "каждый месяц", "month3": "раз в 3 месяца",
+                "month6": "раз в полгода", "year": "раз в год"}
+
 class FinError(Exception):
     """Ошибка, которую можно показать как есть."""
 
@@ -204,9 +211,10 @@ CREATE TABLE IF NOT EXISTS planned (
     title    TEXT    NOT NULL,
     amount   INTEGER NOT NULL,
     due      TEXT    NOT NULL,
-    repeat   TEXT    NOT NULL DEFAULT 'none',   -- none / week / month
+    repeat   TEXT    NOT NULL DEFAULT 'none',   -- none / week / month / month3 / month6 / year
     category TEXT    NOT NULL DEFAULT 'other',
-    active   INTEGER NOT NULL DEFAULT 1
+    active   INTEGER NOT NULL DEFAULT 1,
+    start_day TEXT                              -- с какого дня копим на ближайшую оплату (создание / прошлая оплата)
 );
 
 -- 🎁 Фонды: обязательные траты не каждый месяц (праздники, подарки, годовые платежи)
@@ -511,17 +519,19 @@ class Finance:
 
     # ---------- планируемые траты ----------
 
-    def add_plan(self, title: str, amount: int, due: date, repeat: str = "none", category: str = "other") -> dict:
+    def add_plan(self, title: str, amount: int, due: date, repeat: str = "none", category: str = "other",
+                 today: date | None = None) -> dict:
         if not title.strip():
             raise FinError("Назови платёж")
         if amount <= 0:
             raise FinError("Сумма должна быть больше нуля")
-        if repeat not in ("none", "week", "month"):
+        if repeat not in PLAN_REPEATS:
             raise FinError("Повтор: none / week / month")
         if category not in OUT_KEYS:
             category = guess_cat(title, "out")
-        cur = self.conn.execute("INSERT INTO planned (title, amount, due, repeat, category) VALUES (?, ?, ?, ?, ?)",
-                                (title.strip()[:100], amount, due.isoformat(), repeat, category))
+        cur = self.conn.execute(
+            "INSERT INTO planned (title, amount, due, repeat, category, start_day) VALUES (?, ?, ?, ?, ?, ?)",
+            (title.strip()[:100], amount, due.isoformat(), repeat, category, min(today or date.today(), due).isoformat()))
         self.conn.commit()
         return self.plan(cur.lastrowid)
 
@@ -557,10 +567,12 @@ class Finance:
         self.add_tx(day, "out", p["amount"], p["category"], p["title"], in_limit=False, source="plan", ref_id=pid,
                     envelope="oblig", slot=slot)
         due = date.fromisoformat(p["due"])
-        if p["repeat"] == "month":
-            self.conn.execute("UPDATE planned SET due = ? WHERE id = ?", (_add_months(due, 1).isoformat(), pid))
+        if p["repeat"] in PLAN_MONTHS:
+            self.conn.execute("UPDATE planned SET due = ?, start_day = ? WHERE id = ?",
+                              (_add_months(due, PLAN_MONTHS[p["repeat"]]).isoformat(), day.isoformat(), pid))
         elif p["repeat"] == "week":
-            self.conn.execute("UPDATE planned SET due = ? WHERE id = ?", ((due + timedelta(days=7)).isoformat(), pid))
+            self.conn.execute("UPDATE planned SET due = ?, start_day = ? WHERE id = ?",
+                              ((due + timedelta(days=7)).isoformat(), day.isoformat(), pid))
         else:
             self.conn.execute("UPDATE planned SET active = 0 WHERE id = ?", (pid,))
         self.conn.commit()
@@ -574,8 +586,15 @@ class Finance:
             self.game.env.refresh_today(day)
         return {**self.plan(pid), "took": [x for x in took if x["amount"]], "paid": p["amount"]}
 
-    def edit_plan(self, pid: int, title=None, amount=None, due: date | None = None, repeat=None) -> dict:
+    def edit_plan(self, pid: int, title=None, amount=None, due: date | None = None, repeat=None,
+                  category=None) -> dict:
         p = self.plan(pid)
+        if repeat is not None and repeat not in PLAN_REPEATS:
+            raise FinError("Повтор: разово / неделя / месяц / 3 месяца / полгода / год")
+        if amount is not None and amount <= 0:
+            raise FinError("Сумма должна быть больше нуля")
+        if category is not None and category in CATS:
+            self.conn.execute("UPDATE planned SET category=? WHERE id=?", (category, pid))
         self.conn.execute("UPDATE planned SET title=?, amount=?, due=?, repeat=? WHERE id=?",
                           ((title or p["title"]).strip(), amount or p["amount"],
                            due.isoformat() if due else p["due"], repeat or p["repeat"], pid))

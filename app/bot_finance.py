@@ -230,6 +230,8 @@ class FinUI:
             return "📅 Обязательных платежей нет — добавь в «📅 Обязательное»"
         if b["oblig_gap"]:
             return f"🔴 Обязательное: до следующих денег не хватает <b>{rubr(b['oblig_gap'])}</b>"
+        if b["oblig_late"]:
+            return f"🟡 Обязательное: {b['oblig_late']} отстаёт от графика — догоняю с каждых денег"
         return f"🟢 Обязательное под контролем: {b['oblig_green']} из {b['oblig_total']}"
 
     def envelopes(self) -> tuple[str, InlineKeyboardMarkup]:
@@ -269,6 +271,8 @@ class FinUI:
             lines.append(f"📅 Платежи до следующих денег: {rubr(p['oblig_now'])}")
         if p["funds"]:
             lines.append(f"🎁 В фонды по графику: {rubr(p['funds'])}")
+        if p["sched"]:
+            lines.append(f"📆 На далёкие платежи по графику: {rubr(p['sched'])}")
         if p["ahead"]:
             lines.append(f"⏭ На следующие платежи: {rubr(p['ahead'])} ({p['ahead_pct']}%)")
         if p["funds_short"]:
@@ -313,7 +317,8 @@ class FinUI:
         lines, rows = ["📅 <b>Обязательное</b>", ""], []
         if not ob["items"]:
             lines.append("Пусто. Платежи (проездной, связь, подписки) добавляются в приложении, фонд — кнопкой ниже.")
-        rep = {"none": "", "week": " · 🔁 нед", "month": " · 🔁 мес", "year": " · 🔁 год"}
+        rep = {"none": "", "week": " · 🔁 нед", "month": " · 🔁 мес", "month3": " · 🔁 3 мес", "month6": " · 🔁 полгода",
+               "year": " · 🔁 год"}
         for i in ob["items"]:
             mark = OB_MARK[i["status"]]
             total = max(i["amount"], i["need_total"]) if i["kind"] == "plan" else i["target"]
@@ -321,8 +326,12 @@ class FinUI:
             if i.get("spent"):
                 head += f" (потрачено {rubr(i['spent'])})"
             sub = f"   {days_word(i['days_left'])} ({ddmm(i['due'])}){rep[i['repeat']]}"
-            if i["status"] == "late":
+            if i["status"] == "late" and i["kind"] == "plan" and not i["now"]:
+                sub += f" · отстаём, должно быть ~{rubr(i['expected'])}; догоняем ~{rubr(i['per_week'])}/нед"
+            elif i["status"] == "late":
                 sub += f" · не хватает {rubr(i['need'] if i['kind'] == 'plan' else i['goal_left'])}"
+            elif i["kind"] == "plan" and i["status"] == "progress":
+                sub += f" · копим ~{rubr(i['per_week'])}/нед"
             elif i["status"] == "double":
                 sub += " · и на следующий отложено"
             elif i["kind"] == "fund" and i["status"] == "progress":

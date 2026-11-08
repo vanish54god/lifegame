@@ -51,6 +51,7 @@ function obLine(e) {
   return `<div class="ob-status small" data-act="finTab" data-t="plans" style="cursor:pointer">
     <span class="ob-dots">${dots}</span>
     ${e.oblig_gap ? `<span style="color:var(--bad)">📅 До следующих денег не хватает <b>${rubR(e.oblig_gap)}</b></span>`
+     : e.oblig_late ? `<span style="color:var(--bad)">📅 ${e.oblig_late} отстаёт от графика — бот догоняет</span>`
                   : `<span style="color:var(--good)">📅 Обязательное под контролем · ${e.oblig_green} из ${e.oblig_total}</span>`}</div>`;
 }
 
@@ -85,7 +86,7 @@ function envCard(e) {
   if (e.plan) {
     const p = e.plan;
     html += `<div class="card alloc"><div class="row"><b>📥 Не разложено: ${rubR(e.unallocated)}</b></div>
-      <div class="alloc-parts small">${p.oblig_now ? `<span>📅 ${rubR(p.oblig_now)}</span>` : ""}${p.funds ? `<span>🎁 ${rubR(p.funds)}</span>` : ""}${p.ahead ? `<span title="На следующие платежи">⏭ ${rubR(p.ahead)}</span>` : ""}${p.save ? `<span>🏦 ${rubR(p.save)}</span>` : ""}
+      <div class="alloc-parts small">${p.oblig_now ? `<span>📅 ${rubR(p.oblig_now)}</span>` : ""}${p.funds ? `<span>🎁 ${rubR(p.funds)}</span>` : ""}${p.sched ? `<span title="Копим на далёкие платежи">📆 ${rubR(p.sched)}</span>` : ""}${p.ahead ? `<span title="На следующие платежи">⏭ ${rubR(p.ahead)}</span>` : ""}${p.save ? `<span>🏦 ${rubR(p.save)}</span>` : ""}
         <span>🧍 ${rubR(p.me)}</span><span>❤️ ${rubR(p.rel)}</span><span>🎯 ${rubR(p.want)}</span></div>
       ${p.funds_short ? `<div class="small muted" style="margin:6px 0">🎁 Фондам недодам ${rubR(p.funds_short)} — чтобы осталось на жизнь. Догонят со следующих денег.</div>` : ""}
       <button class="btn btn-accent wide" data-act="envApply">💌 Разложить</button></div>`;
@@ -349,6 +350,10 @@ actions.compPay = async el => {
 };
 
 // ---------- 📅 Обязательное: платежи и фонды, у каждого свои деньги ----------
+const REP_TITLE = { none: "разово", week: "каждую неделю", month: "каждый месяц", month3: "раз в 3 месяца",
+                    month6: "раз в полгода", year: "раз в год" };
+const repOpts = sel => ["month", "month3", "month6", "year", "week", "none"].map(k =>
+  `<option value="${k}" ${k === sel ? "selected" : ""}>${REP_TITLE[k][0].toUpperCase() + REP_TITLE[k].slice(1)}</option>`).join("");
 const OB_BADGE = {
   double: "🟢🟢 и на следующий", ok: "🟢 хватает", progress: "🟡 копится", late: "🔴 не хватает",
 };
@@ -365,11 +370,12 @@ function obCard(i, e) {
   const bar2 = `<div class="dayprog-bar" style="margin:8px 0 6px"><div class="dayprog-fill" style="width:${i.progress}%;background:${i.status === "late" ? "var(--bad)" : i.status === "progress" ? "var(--accent)" : "var(--good)"}"></div></div>`;
   let hint;
   if (i.kind === "plan") {
-    const rep = { none: "разово", week: "🔁 каждую неделю", month: "🔁 каждый месяц" }[i.repeat];
+    const rep = (i.repeat === "none" ? "" : "🔁 ") + REP_TITLE[i.repeat];
     hint = i.status === "double" ? "Оплатишь спокойно — и на следующий раз уже отложено"
-      : i.status === "ok" ? (i.repeat === "none" ? "Оплатишь спокойно" : "Оплатишь спокойно · бот понемногу копит на следующий")
-      : i.status === "late" ? `До ${ddmm(i.due)} не хватает <b>${rubR(i.need)}</b> — бот доложит с ближайших денег, или докинь сам`
-      : `Копится заранее · ${i.progress}%`;
+      : i.status === "ok" ? (["week", "month"].includes(i.repeat) ? "Оплатишь спокойно · бот понемногу копит на следующий" : "Оплатишь спокойно")
+      : i.status === "late" && i.now ? `До ${ddmm(i.due)} не хватает <b>${rubR(i.need)}</b> — бот доложит с ближайших денег, или докинь сам`
+      : i.status === "late" ? `Отстаём от графика: к сегодня должно быть ~${rubR(i.expected)}. Бот догоняет — ~${rubR(i.per_week)} в неделю, или докинь сам`
+      : `Копится по графику · ~${rubR(i.per_week)} в неделю, бот откладывает сам`;
     hint = `<span class="muted">${whenText(i.days_left, i.due)} · ${rep}</span><br>${hint}`;
   } else {
     hint = i.status === "ok" ? "Набрано! 🎉 Можно тратить"
@@ -385,7 +391,8 @@ function obCard(i, e) {
   return `<div class="card ob-item ob-${i.status}">
     <div class="row"><span style="font-size:22px">${i.emoji}</span>
       <div class="q-body"><div class="q-title">${esc(i.title)}</div></div>
-      <span class="ob-badge">${OB_BADGE[i.status]}</span>
+      <span class="ob-badge">${i.status === "late" && !i.now ? "🔴 отстаём" : OB_BADGE[i.status]}</span>
+      ${i.kind === "plan" ? `<button class="btn btn-sm btn-ghost" data-act="planEdit" data-id="${i.id}" aria-label="Изменить">✏️</button>` : ""}
       <button class="btn btn-sm btn-ghost" data-act="${i.kind === "plan" ? "planDel" : "fundDel"}" data-id="${i.id}" aria-label="Удалить">✕</button></div>
     <div class="row" style="margin-top:6px"><span class="ob-sum" style="color:${i.status === "late" ? "var(--bad)" : i.status === "progress" ? "var(--ink)" : "var(--good)"}">${rubR(i.balance)}</span>
       <span class="muted small">из ${rubR(i.kind === "plan" ? Math.max(i.amount, i.need_total) : i.target)}${i.kind === "plan" && i.goal > i.amount ? ` · с запасом ${rubR(i.goal)}` : ""}${i.spent ? ` · уже потрачено ${rubR(i.spent)}` : ""}</span></div>
@@ -395,6 +402,11 @@ function obCard(i, e) {
       <button class="btn btn-sm" data-act="obOpen" data-slot="${i.slot}">＋ Докинуть</button>
       ${i.balance > 0 ? `<button class="btn btn-sm" data-act="obTake" data-slot="${i.slot}" data-max="${i.balance}">− Забрать</button>` : ""}
 </div>
+    ${i.kind === "plan" && state.planEdit === i.id ? `<form data-submit="planSave" data-id="${i.id}" style="margin-top:10px">
+      <div class="row"><label class="field" style="flex:1"><span>Сумма ₽</span><input class="input" name="amount" type="number" min="1" step="0.01" value="${i.amount / 100}" required></label>
+        <label class="field" style="flex:1"><span>Следующая оплата</span><input class="input" name="due" type="date" value="${i.due}" required></label></div>
+      <label class="field"><span>Повтор</span><select class="input" name="repeat">${repOpts(i.repeat)}</select></label>
+      <button class="btn btn-accent wide" type="submit">Сохранить</button></form>` : ""}
     ${open ? `<form class="row wrap" data-submit="obPut" data-slot="${i.slot}" style="margin-top:10px">
       <select class="input" name="src" style="flex:2;min-width:160px">${srcs.map(([k, l]) => `<option value="${k}">${l}</option>`).join("")}</select>
       <input class="input" name="amount" type="number" min="1" inputmode="decimal" placeholder="₽" value="${i.need > 0 ? Math.ceil(i.need / 100) : ""}" required style="flex:1;min-width:80px">
@@ -421,7 +433,7 @@ FIN.plans = async () => {
       <label class="field"><span>Что</span><input class="input" name="title" maxlength="100" placeholder="Проездной, связь, VPS…" required></label>
       <div class="row"><label class="field" style="flex:1"><span>Сумма ₽</span><input class="input" name="amount" type="number" min="1" step="0.01" inputmode="decimal" required></label>
         <label class="field" style="flex:1"><span>Когда платить</span><input class="input" name="due" type="date" value="${addDays(state.meta.today, 1)}" required></label></div>
-      <div class="row"><label class="field" style="flex:1"><span>Повтор</span><select class="input" name="repeat"><option value="month">Каждый месяц</option><option value="none">Разово</option><option value="week">Каждую неделю</option></select></label>
+      <div class="row"><label class="field" style="flex:1"><span>Повтор</span><select class="input" name="repeat">${repOpts("month")}</select></label>
         <label class="field" style="flex:1"><span>Категория</span><select class="input" name="category">${catOpts("out", "subs")}</select></label></div>
       <button class="btn btn-accent wide" type="submit">Добавить платёж</button></form>`
     : `<form data-submit="fundAdd">
@@ -433,6 +445,13 @@ FIN.plans = async () => {
       <label class="row small" style="gap:8px;margin:4px 0 12px"><input type="checkbox" name="remind" checked> За 2 недели закинуть в банк задачу «выбрать и купить»</label>
       <button class="btn btn-accent wide" type="submit">Создать фонд</button></form>`}</div>`;
   return { html };
+};
+actions.planEdit = el => { const id = Number(el.dataset.id); state.planEdit = state.planEdit === id ? null : id; return reFin(); };
+actions.planSave = async form => {
+  await api("PATCH", "/fin/plans/" + form.dataset.id, { amount: Number(form.amount.value), due: form.due.value, repeat: form.repeat.value });
+  state.planEdit = null;
+  toast("✏️ Сохранено");
+  await reFin();
 };
 actions.obAdd = el => { state.obAdd = el.dataset.k; return reFin(); };
 actions.obOpen = el => { state.obOpen = state.obOpen === el.dataset.slot ? null : el.dataset.slot; return reFin(); };

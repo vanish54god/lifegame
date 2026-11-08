@@ -18,7 +18,7 @@ from collections import defaultdict
 from datetime import date, timedelta
 
 from .envelopes import ENVS, EnvError
-from .finance import CATS, OUT_KEYS, _add_months, guess_cat, rub
+from .finance import CATS, OUT_KEYS, PLAN_MONTHS, _add_months, guess_cat, rub
 
 FUND_GRACE = 7          # столько дней после даты фонда из него ещё можно тратить
 TASK_DAYS = 14          # за сколько дней закинуть в банк «выбрать подарок»
@@ -248,8 +248,8 @@ class Obligations:
     @staticmethod
     def _dates(p: dict, n: int = 6) -> list[date]:
         due = date.fromisoformat(p["due"])
-        if p["repeat"] == "month":
-            return [_add_months(due, i) for i in range(n)]
+        if p["repeat"] in PLAN_MONTHS:
+            return [_add_months(due, PLAN_MONTHS[p["repeat"]] * i) for i in range(n)]
         if p["repeat"] == "week":
             return [due + timedelta(days=7 * i) for i in range(n)]
         return [due]
@@ -263,23 +263,40 @@ class Obligations:
             b = bal.get(slot, 0)
             rep = p["repeat"] != "none"
             dates = self._dates(p)
+            due = dates[0]
+            days_to = (due - today).days
             n_now = sum(1 for d in dates if d <= until)
             need_total = a * n_now
             ok_line = max(a, need_total)
-            goal = a * (max(n_now, 1) + 1) if rep else a
-            if rep and b >= ok_line + a:
+            # двойной запас — для частых платежей; на полгода-год вперёд хватит одного
+            goal = a * (max(n_now, 1) + 1) if p["repeat"] in ("week", "month") else max(a, need_total)
+            # платёж далеко — копим по графику: растягиваем остаток до даты, как фонд
+            sched = expected = 0
+            if not n_now and b < a and days_to > 0:
+                sched = min(a - b, _ceil100((a - b) * hdays // days_to))
+                if p.get("start_day"):
+                    start = date.fromisoformat(p["start_day"])
+                elif p["repeat"] in PLAN_MONTHS:
+                    start = _add_months(due, -PLAN_MONTHS[p["repeat"]])
+                else:
+                    start = today
+                span = max(1, (due - start).days)
+                expected = round(a * min(1.0, max(0, (today - start).days) / span))
+            if rep and b >= ok_line + a and goal > ok_line:
                 status = "double"
             elif b >= ok_line:
                 status = "ok"
-            elif b < need_total:
-                status = "late"
+            elif b < need_total or (expected and b < expected * 0.8 and expected - b >= 10000):
+                status = "late"          # не хватает к сроку или отстаём от графика
             else:
                 status = "progress"
             out.append({
                 "kind": "plan", "id": p["id"], "slot": slot, "title": p["title"], "emoji": p["emoji"],
                 "category": p["category"], "amount": a, "due": p["due"], "days_left": p["days_left"],
-                "repeat": p["repeat"], "balance": b, "need_total": need_total, "need": max(0, need_total - b),
-                "goal": goal, "goal_left": max(0, goal - b), "status": status, "now": n_now > 0,
+                "repeat": p["repeat"], "balance": b, "need_total": need_total,
+                "need": max(0, need_total - b) if n_now else sched, "goal": goal, "goal_left": max(0, goal - b),
+                "status": status, "now": n_now > 0, "expected": expected, "behind": max(0, expected - b),
+                "per_week": _ceil100(max(0, a - b) * 7 // days_to) if days_to > 0 else max(0, a - b),
                 "covered": max(0, b) // a if a else 0, "progress": max(0, min(100, round(100 * b / ok_line))),
                 "dates": [d.isoformat() for d in dates],
             })
@@ -330,7 +347,7 @@ class Obligations:
         items = self.items(today) if items is None else items
         slots: dict = defaultdict(int)
         left = amount
-        part = {"plan": 0, "fund": 0}
+        part = {"plan": 0, "fund": 0, "sched": 0}
         # 1) срочное: платежи и фонды, у которых срок до следующих денег, — по дате, сколько бы ни было
         for i in sorted((i for i in items if i["need"] > 0 and i["now"]), key=lambda i: i["due"]):
             x = min(left, i["need"])
@@ -338,7 +355,7 @@ class Obligations:
                 slots[i["slot"]] += x
                 left -= x
                 part[i["kind"]] += x
-        # 2) фонды по графику и запас — не больше половины оставшегося: на жизнь должно остаться
+        # 2) по графику (фонды и далёкие платежи) и запас — не больше половины оставшегося: на жизнь должно остаться
         flex = left * flex_share // 100
         short = 0
         for i in sorted((i for i in items if i["need"] > 0 and not i["now"]), key=lambda i: i["due"]):
@@ -348,7 +365,7 @@ class Obligations:
                 slots[i["slot"]] += x
                 left -= x
                 flex -= x
-                part[i["kind"]] += x
+                part["fund" if i["kind"] == "fund" else "sched"] += x
         # 3) «на следующий раз»: по кусочку на каждый будущий платёж, ближайшие первыми
         ahead, cap = 0, min(flex, max(0, ahead_cap))
         if cap > 0:
@@ -376,7 +393,7 @@ class Obligations:
                 cap -= x
                 ahead += x
         return {"slots": {k: v for k, v in slots.items() if v}, "now": part["plan"], "funds": part["fund"],
-                "ahead": ahead, "short": short}
+                "sched": part["sched"], "ahead": ahead, "short": short}
 
     def distribute(self, today: date) -> int:
         """Общий запас «Обязательного» — сам по ячейкам: сначала то, что горит, потом на следующий раз."""
@@ -444,14 +461,19 @@ class Obligations:
         until30 = (today + timedelta(days=30)).isoformat()
         for i in items:
             if i["kind"] == "plan":
-                month += i["amount"] if i["repeat"] == "month" else round(i["amount"] * 30 / 7) \
-                    if i["repeat"] == "week" else (i["amount"] if i["due"] <= until30 else 0)
+                if i["repeat"] in PLAN_MONTHS:
+                    month += i["amount"] // PLAN_MONTHS[i["repeat"]]
+                elif i["repeat"] == "week":
+                    month += round(i["amount"] * 30 / 7)
+                elif i["due"] <= until30:
+                    month += i["amount"]
             else:
                 months = max(1, round(max(1, i["days_left"]) / 30))
                 month += i["goal_left"] // months
         need_now = sum(i["need_total"] if i["kind"] == "plan" else i["balance"] + i["need"]
                        for i in items if i["now"])
         gap = sum(i["need"] for i in items if i["now"])
+        behind = sum(i.get("behind", 0) for i in items if not i["now"] and i["status"] == "late")
         counts = defaultdict(int)
         for i in items:
             counts[i["status"]] += 1
@@ -461,7 +483,7 @@ class Obligations:
             "reserved": sum(bal.values()), "buffer": bal.get(None, 0), "gap": gap,
             "green": green, "total": len(items), "late": counts["late"], "double": counts["double"],
             "all_ok": bool(items) and counts["late"] == 0 and gap == 0, "ahead_pct": self.ahead_pct,
-            "month_gap": max(0, month - sum(bal.values())),
+            "month_gap": max(0, month - sum(bal.values())), "behind": behind,
         }
 
     def counts(self, today: date) -> dict:

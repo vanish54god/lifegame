@@ -176,7 +176,7 @@ class Envelopes:
         rest -= save
         parts = {k: rest * st["shares"][k] // 100 for k in SPEND_ENVS}
         parts["me"] += rest - sum(parts.values())          # копейки-остаток — в «Я»
-        return {"amount": amount, "oblig": oblig, "oblig_now": al["now"], "funds": al["funds"], "ahead": al["ahead"],
+        return {"amount": amount, "oblig": oblig, "oblig_now": al["now"], "funds": al["funds"], "sched": al["sched"], "ahead": al["ahead"],
                 "slots": al["slots"], "funds_short": al["short"], "save": save, **parts, "save_pct": st["save_pct"], "ahead_pct": st["ahead_pct"],
                 "shares": st["shares"], "until": until.isoformat()}
 

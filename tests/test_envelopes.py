@@ -21,10 +21,11 @@ def game():
 def test_plan_obligatory_first_then_save_then_shares(game):
     f, e = game.fin, game.env
     f.add_plan("VPS", 50000, T + timedelta(days=5), "month")
-    f.add_plan("Подписка", 30000, T + timedelta(days=60))            # далеко — не резервируем
+    f.add_plan("Подписка", 30000, T + timedelta(days=60))            # далеко — не закрываем целиком
     p = e.plan(1000000, T)                                             # 10 000 ₽
     assert p["oblig_now"] == 50000                                     # до следующих денег — только VPS
-    assert p["ahead"] == 80000                     # из 10% «на следующий раз»: второй VPS 500 + подписка 300
+    assert p["sched"] > 0                          # подписка далеко — копится по графику
+    assert p["sched"] + p["ahead"] == 80000        # плюс 10% «на следующий раз»: второй VPS 500 + подписка 300
     assert p["oblig"] == 130000
     assert p["save"] == 87000                                          # 10% от 8 700
     assert (p["me"], p["rel"], p["want"]) == (313200, 313200, 156600)  # 40/40/20 от 7 830
