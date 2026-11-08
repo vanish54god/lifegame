@@ -23,9 +23,11 @@ def test_plan_obligatory_first_then_save_then_shares(game):
     f.add_plan("VPS", 50000, T + timedelta(days=5), "month")
     f.add_plan("Подписка", 30000, T + timedelta(days=60))            # далеко — не резервируем
     p = e.plan(1000000, T)                                             # 10 000 ₽
-    assert p["oblig"] == 50000
-    assert p["save"] == 95000                                          # 10% от 9 500
-    assert (p["me"], p["rel"], p["want"]) == (342000, 342000, 171000)  # 40/40/20 от 8 550
+    assert p["oblig_now"] == 50000                                     # до следующих денег — только VPS
+    assert p["ahead"] == 80000                     # из 10% «на следующий раз»: второй VPS 500 + подписка 300
+    assert p["oblig"] == 130000
+    assert p["save"] == 87000                                          # 10% от 8 700
+    assert (p["me"], p["rel"], p["want"]) == (313200, 313200, 156600)  # 40/40/20 от 7 830
     assert p["oblig"] + p["save"] + p["me"] + p["rel"] + p["want"] == 1000000
 
 
@@ -232,9 +234,9 @@ def test_obligations_and_reserve_mode(game):
     f.add_plan("VPS", 50000, T + timedelta(days=20), "month")
     ob = e.obligations(T)
     assert ob["month_total"] == 260000 and ob["need_now"] == 210000
-    assert e.plan(1000000, T)["oblig"] == 210000            # до следующих денег — только проездной
+    assert e.plan(1000000, T)["oblig_now"] == 210000        # до следующих денег — только проездной
     e.save_settings(reserve="month")
-    assert e.plan(1000000, T)["oblig"] == 260000            # на месяц вперёд — оба
+    assert e.plan(1000000, T)["oblig_now"] == 260000        # на месяц вперёд — оба
     assert e.obligations(T)["need_now"] == 260000
 
 

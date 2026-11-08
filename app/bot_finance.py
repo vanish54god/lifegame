@@ -44,6 +44,33 @@ class EnvMove(StatesGroup):
     amount = State()
 
 
+class SlotPut(StatesGroup):
+    amount = State()
+
+
+class FundFlow(StatesGroup):
+    title = State()
+    target = State()
+    due = State()
+
+
+OB_MARK = {"double": "🟢🟢", "ok": "🟢", "progress": "🟡", "late": "🔴"}
+
+
+def parse_ddmm(text: str, today: date, future: bool = False) -> date | None:
+    m = re.match(r"^\s*(\d{1,2})\.(\d{1,2})(?:\.(\d{2,4}))?\s*$", text)
+    if not m:
+        return None
+    try:
+        y = int(m.group(3)) if m.group(3) else today.year
+        d = date(y + 2000 if y < 100 else y, int(m.group(2)), int(m.group(1)))
+    except ValueError:
+        return None
+    if future and d < today and not m.group(3):
+        d = d.replace(year=d.year + 1)          # «14.02» в ноябре — это следующий год
+    return d
+
+
 def kb(*rows) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[r for r in rows if r])
 
@@ -118,7 +145,7 @@ class FinUI:
         lines.append("\n<i>Записать трату: просто напиши «кофе 250» или «+5000 монтаж»</i>")
         return "\n".join(lines), kb(
             [Btn(text="💼 Смена", callback_data="fin:shift"), Btn(text="💰 Зарплата", callback_data="fin:salary")],
-            [Btn(text="📅 Платежи", callback_data="fin:plans"), Btn(text="🎯 Желания", callback_data="fin:wishes")],
+            [Btn(text="📅 Обязательное", callback_data="fin:plans"), Btn(text="🎯 Желания", callback_data="fin:wishes")],
             [Btn(text="🧾 Последние операции", callback_data="fin:recent")],
             [Btn(text="🌐 Подробно в приложении", callback_data="adm:web")],
         )
@@ -130,19 +157,26 @@ class FinUI:
         today = self.ui.today()
         when = "" if t["day"] == today.isoformat() else \
             " · 📅 вчера" if t["day"] == (today - timedelta(days=1)).isoformat() else f" · 📅 {ddmm(t['day'])}"
-        envl = f" → {t['env_emoji']} {t['env_title']}" if t.get("envelope") in SPEND_ENVS else ""
+        in_fund = t.get("envelope") == "oblig" and (t.get("slot") or "").startswith("f")
+        envl = f" → {t['env_emoji']} {escape(t['env_title'])}" if t.get("envelope") in SPEND_ENVS or in_fund else ""
         text = f"{icon} <b>{sign}{rub(t['amount'])}</b> · {t['emoji']} {t['cat_title']}{note}{when}{envl}"
         if t["kind"] == "out" and t["in_limit"] and not when and t.get("envelope") != "want":
             text += "\n" + self.limit_line()
         if t.get("envelope") == "want" and self.game.env.on:
             text += f"\n🎯 В «Хотелках» осталось {rubr(self.game.env.balance('want'))}"
+        if in_fund:
+            text += f"\n🎁 В фонде осталось {rubr(self.game.env.ob.slot_balance(t['slot']))}"
         if t["kind"] == "in":
             text += f"\nСвободно: {rub(self.fin.balance())}"
-        env_row = None
+        env_row = fund_row = None
         if t["kind"] == "out" and t["source"] == "manual":
             env_row = [Btn(text=("• " if t.get("envelope") == k else "") + f"{ENVS[k][0]} {ENVS[k][1]}",
                            callback_data=f"fin:env:{t['id']}:{k}") for k in SPEND_ENVS]
-        return text, kb(env_row,
+            if self.game.env.on:
+                fs = [i for i in self.game.env.ob.items(today) if i["kind"] == "fund" and (i["spend"] or t.get("slot") == i["slot"])]
+                fund_row = [Btn(text=("• " if t.get("slot") == i["slot"] else "") + f"🎁 {short(i['title'], 18)}",
+                                callback_data=f"fin:env:{t['id']}:{i['slot']}") for i in fs[:3]] or None
+        return text, kb(env_row, fund_row,
                         [Btn(text="🏷 Категория", callback_data=f"fin:cats:{t['id']}"),
                          Btn(text="📅 Не сегодня" if not when else "📅 Дата", callback_data=f"fin:day:{t['id']}"),
                          Btn(text="🗑", callback_data=f"fin:del:{t['id']}")])
@@ -179,19 +213,24 @@ class FinUI:
                 lines.append(f"🔮 К следующим деньгам останется ~<b>{rubr(fc)}</b>")
             else:
                 lines.append(f"⚠️ В текущем темпе не хватит <b>{rubr(-fc)}</b> — притормози")
-            lines.append(f"📅 Обязательное: отложено {rubr(b['oblig'])} · до следующих денег нужно {rubr(b['oblig_need'])}"
-                         f" · в месяц ~{rubr(b['oblig_month'])}")
-            if b["oblig"] < b["oblig_need"]:
-                lines.append(f"⚠️ На обязательное не хватает {rubr(b['oblig_need'] - b['oblig'])}")
+            lines.append(self.ob_line(b))
             if b["unallocated"] > 0:
                 lines.append(f"\n📥 Не разложено: <b>{rub(b['unallocated'])}</b>")
                 rows.append([Btn(text="💌 Разложить", callback_data="env:prop")])
             if b["saved_month"] > 0:
                 lines.append(f"🏦 В копилку за месяц: {rub(b['saved_month'])}")
         rows += [[Btn(text="💌 Конверты", callback_data="env:list"), Btn(text="💼 Смены", callback_data="fin:salary")],
-                 [Btn(text="📅 Платежи", callback_data="fin:plans"), Btn(text="🎯 Желания", callback_data="fin:wishes")],
+                 [Btn(text="📅 Обязательное", callback_data="fin:plans"), Btn(text="🎯 Желания", callback_data="fin:wishes")],
                  [Btn(text="📊 Подробнее", callback_data="fin:home")]]
         return "\n".join(lines), kb(*rows)
+
+    @staticmethod
+    def ob_line(b: dict) -> str:
+        if not b["oblig_total"]:
+            return "📅 Обязательных платежей нет — добавь в «📅 Обязательное»"
+        if b["oblig_gap"]:
+            return f"🔴 Обязательное: до следующих денег не хватает <b>{rubr(b['oblig_gap'])}</b>"
+        return f"🟢 Обязательное под контролем: {b['oblig_green']} из {b['oblig_total']}"
 
     def envelopes(self) -> tuple[str, InlineKeyboardMarkup]:
         env = self.game.env
@@ -226,12 +265,18 @@ class FinUI:
             return None
         p = env.plan(amount, self.ui.today())
         lines = [f"📥 {title or 'Пришли деньги'}: <b>{rub(amount)}</b>. Разложим?", ""]
-        if p["oblig"]:
-            lines.append(f"📅 Обязательное: {rub(p['oblig'])}")
+        if p["oblig_now"]:
+            lines.append(f"📅 Платежи до следующих денег: {rubr(p['oblig_now'])}")
+        if p["funds"]:
+            lines.append(f"🎁 В фонды по графику: {rubr(p['funds'])}")
+        if p["ahead"]:
+            lines.append(f"⏭ На следующие платежи: {rubr(p['ahead'])} ({p['ahead_pct']}%)")
+        if p["funds_short"]:
+            lines.append(f"<i>🎁 Фондам недодал {rubr(p['funds_short'])} — чтобы осталось на жизнь. Докинешь со следующих денег</i>")
         if p["save"]:
-            lines.append(f"🏦 Копилка: {rub(p['save'])} ({p['save_pct']}%)")
+            lines.append(f"🏦 Копилка: {rubr(p['save'])} ({p['save_pct']}%)")
         for k in SPEND_ENVS:
-            lines.append(f"{ENVS[k][0]} {ENVS[k][1]}: {rub(p[k])}")
+            lines.append(f"{ENVS[k][0]} {ENVS[k][1]}: {rubr(p[k])}")
         return "\n".join(lines), kb([Btn(text="✅ Разложить", callback_data=f"env:ok:{amount}"),
                                      Btn(text="Не сейчас", callback_data="env:no")])
 
@@ -261,18 +306,41 @@ class FinUI:
         return "\n".join(lines), kb(*rows)
 
     def plans(self) -> tuple[str, InlineKeyboardMarkup]:
-        ps = self.fin.plans(self.ui.today())
-        lines, rows = ["📅 <b>Планируемые траты</b>", ""], []
-        if not ps:
-            lines.append("Пусто. Добавить платёж можно в приложении: Финансы → Планы.")
-        rep = {"none": "", "week": " 🔁 нед", "month": " 🔁 мес"}
-        for p in ps:
-            warn = "⚠️ " if p["days_left"] < 0 else ""
-            lines.append(f"{warn}{p['emoji']} {escape(p['title'])} — <b>{rub(p['amount'])}</b>, "
-                         f"{days_word(p['days_left'])} ({ddmm(p['due'])}){rep[p['repeat']]}")
-            if p["days_left"] <= 7:
-                rows.append([Btn(text=f"✅ Оплатил: {short(p['title'], 20)}", callback_data=f"fin:ppay:{p['id']}")])
-        rows.append([Btn(text="⬅️ Деньги", callback_data="env:money")])
+        """📅 Обязательное: каждый платёж и фонд со своими деньгами и цветом."""
+        t = self.ui.today()
+        env = self.game.env
+        ob = env.obligations(t)
+        lines, rows = ["📅 <b>Обязательное</b>", ""], []
+        if not ob["items"]:
+            lines.append("Пусто. Платежи (проездной, связь, подписки) добавляются в приложении, фонд — кнопкой ниже.")
+        rep = {"none": "", "week": " · 🔁 нед", "month": " · 🔁 мес", "year": " · 🔁 год"}
+        for i in ob["items"]:
+            mark = OB_MARK[i["status"]]
+            total = max(i["amount"], i["need_total"]) if i["kind"] == "plan" else i["target"]
+            head = f"{mark} {'🎁 ' if i['kind'] == 'fund' else ''}<b>{escape(i['title'])}</b> — {rubr(i['balance'])} / {rubr(total)}"
+            if i.get("spent"):
+                head += f" (потрачено {rubr(i['spent'])})"
+            sub = f"   {days_word(i['days_left'])} ({ddmm(i['due'])}){rep[i['repeat']]}"
+            if i["status"] == "late":
+                sub += f" · не хватает {rubr(i['need'] if i['kind'] == 'plan' else i['goal_left'])}"
+            elif i["status"] == "double":
+                sub += " · и на следующий отложено"
+            elif i["kind"] == "fund" and i["status"] == "progress":
+                sub += f" · ~{rubr(i['per_week'])}/нед"
+            lines += [head, sub]
+            btns = []
+            if i["kind"] == "plan" and i["days_left"] <= 7:
+                btns.append(Btn(text=f"✅ Оплатил: {short(i['title'], 16)}", callback_data=f"fin:ppay:{i['id']}"))
+            btns.append(Btn(text=f"➕ {short(i['title'], 14) if len(btns) else short(i['title'], 22)}",
+                            callback_data=f"ob:put:{i['slot']}"))
+            rows.append(btns)
+        if ob["items"]:
+            lines.append("")
+            lines.append(f"🔴 До {ddmm(ob['until'])} не хватает <b>{rubr(ob['gap'])}</b>" if ob["gap"]
+                         else f"Под контролем: <b>{ob['green']} из {ob['total']}</b> · отложено {rubr(ob['reserved'])}")
+            lines.append(f"<i>С каждых денег бот сам закрывает платежи до следующих денег, кормит фонды по графику "
+                         f"и кладёт {ob['ahead_pct']}% на следующий раз.</i>")
+        rows.append([Btn(text="🎁 Новый фонд", callback_data="ob:fund"), Btn(text="⬅️ Деньги", callback_data="env:money")])
         return "\n".join(lines), kb(*rows)
 
     def wishes(self) -> tuple[str, InlineKeyboardMarkup]:
@@ -305,14 +373,26 @@ class FinUI:
 
     def digest_lines(self) -> tuple[list[str], list[list[Btn]]]:
         """Платежи для утренней сводки."""
-        ps = self.fin.digest(self.ui.today())
-        if not ps:
+        t = self.ui.today()
+        ps = self.fin.digest(t)
+        env = self.game.env
+        status = {}
+        late = []
+        if env.on:
+            ob = env.obligations(t)
+            status = {i["slot"]: i["status"] for i in ob["items"]}
+            late = [i for i in ob["items"] if i["status"] == "late" and i["kind"] == "fund"]
+        if not ps and not late:
             return [], []
         lines = ["\n📅 <b>Платежи</b>"]
         rows = []
         for p in ps:
-            lines.append(f"• {escape(p['title'])} — {rub(p['amount'])}, {days_word(p['days_left'])}")
+            mark = OB_MARK.get(status.get(f"p{p['id']}"), "•")
+            lines.append(f"{mark} {escape(p['title'])} — {rub(p['amount'])}, {days_word(p['days_left'])}")
             rows.append([Btn(text=f"✅ Оплатил: {short(p['title'], 22)}", callback_data=f"fin:ppay:{p['id']}")])
+        for i in late:
+            lines.append(f"🔴 🎁 {escape(i['title'])}: не успеваем, нужно ещё {rubr(i['goal_left'])} до {ddmm(i['due'])}")
+            rows.append([Btn(text=f"➕ Докинуть: {short(i['title'], 20)}", callback_data=f"ob:put:{i['slot']}")])
         return lines, rows
 
     def checkin(self) -> tuple[str, InlineKeyboardMarkup]:
@@ -610,14 +690,20 @@ def register_finance(router: Router, ui, edit, celebrate, main_kb) -> FinUI:
 
     @router.callback_query(F.data.startswith("fin:ppay:"))
     async def plan_pay(cb: CallbackQuery):
+        before = ui.game._achieved(ui.today())
         try:
             p = fin.plan(int(cb.data.split(":")[2]))
-            fin.pay_plan(p["id"], ui.today())
-        except FinError as e:
+            r = fin.pay_plan(p["id"], ui.today())
+        except (FinError, EnvError) as e:
             return await fin_err(cb, e)
-        await cb.answer(f"✅ {p['title']}: −{rub(p['amount'])}")
+        took = [x for x in r.get("took", []) if x["src"] != "buffer"]
+        note = ("\nДобрал: " + ", ".join(f"{rubr(x['amount'])} из {x['title']}" for x in took)) if took else \
+            "\nИз отложенного 👌"
+        await cb.answer(f"✅ {p['title']}: −{rub(p['amount'])}{note}", show_alert=bool(took))
         text, markup = fu.plans()
         await edit(cb, text, markup)
+        new = [a for a in ui.game.full_stats(ui.today())["achievements"] if a["done"] and a["key"] not in before]
+        await celebrate(cb.message, {"level_before": 0, "level_after": 0, "new_achievements": new})
 
     @router.callback_query(F.data.startswith("fin:wadd:"))
     async def wish_add(cb: CallbackQuery, state: FSMContext):
@@ -736,7 +822,7 @@ def register_finance(router: Router, ui, edit, celebrate, main_kb) -> FinUI:
             t = ui.game.env.set_tx_envelope(int(tid), env)
         except (EnvError, FinError) as e:
             return await fin_err(cb, e)
-        await cb.answer(f"{ENVS[env][0]} {ENVS[env][1]}")
+        await cb.answer(f"{t['env_emoji']} {t['env_title']}")
         text, markup = fu.tx_text(t)
         await edit(cb, text, markup)
 
@@ -788,5 +874,120 @@ def register_finance(router: Router, ui, edit, celebrate, main_kb) -> FinUI:
             return await msg.answer(f"⛔ {escape(str(e))}")
         text, markup = fu.envelopes()
         await msg.answer("↔️ Готово\n\n" + text, reply_markup=markup)
+
+    # ---------- 📅 докинуть на конкретный платёж или фонд ----------
+
+    @router.callback_query(F.data.startswith("ob:put:"))
+    async def ob_put_src(cb: CallbackQuery):
+        slot = cb.data.split(":")[2]
+        env = ui.game.env
+        t = ui.today()
+        try:
+            it = env.ob.item(slot, t)
+        except (EnvError, FinError) as e:
+            return await fin_err(cb, e)
+        bal = env.balances()
+        srcs = [("free", f"📥 Неразложенные · {rubr(env.unallocated())}", env.unallocated()),
+                ("buffer", f"📅 Общий запас · {rubr(env.ob.slot_balance(None))}", env.ob.slot_balance(None)),
+                ("want", f"🎯 Хотелки · {rubr(bal['want'])}", bal["want"]),
+                ("me", f"🧍 Я · {rubr(bal['me'])}", bal["me"]),
+                ("rel", f"❤️ Отношения · {rubr(bal['rel'])}", bal["rel"])]
+        btns = [[Btn(text=label, callback_data=f"ob:src:{slot}:{k}")] for k, label, v in srcs if v > 0]
+        await cb.answer()
+        if it.get("status") == "late":
+            more = f", не хватает {rubr(it['need'] if it['kind'] == 'plan' else it['goal_left'])}"
+        elif it.get("goal_left"):
+            more = f", до {'полной суммы' if it['kind'] == 'fund' else 'двойного запаса'} ещё {rubr(it['goal_left'])}"
+        else:
+            more = " — всё с запасом"
+        text = (f"{OB_MARK.get(it.get('status'), '')} <b>{escape(it['title'])}</b>: отложено {rubr(it['balance'])}"
+                + more + "\n\nОткуда докинуть?")
+        if not btns:
+            return await cb.message.answer(text + "\n\nВезде пусто 🤷")
+        await cb.message.answer(text, reply_markup=kb(*btns, [Btn(text="✖️ Отмена", callback_data="fin:plans")]))
+
+    @router.callback_query(F.data.startswith("ob:src:"))
+    async def ob_put_amount(cb: CallbackQuery, state: FSMContext):
+        _, _, slot, src = cb.data.split(":")
+        it = ui.game.env.ob.item(slot, ui.today())
+        await state.set_state(SlotPut.amount)
+        await state.update_data(slot=slot, src=src)
+        await cb.answer()
+        need = (it.get("need") if it.get("kind") == "plan" else it.get("goal_left")) if it.get("status") == "late" \
+            else it.get("goal_left")
+        hint = f" (чтобы закрыть — <code>{round(need / 100)}</code>)" if need else ""
+        await edit(cb, f"Сколько докинуть на «{escape(it['title'])}»?{hint}")
+
+    @router.message(SlotPut.amount, F.text)
+    async def ob_put_do(msg: Message, state: FSMContext):
+        m = re.match(r"^\s*" + AMOUNT + r"\s*$", msg.text, re.I)
+        if not m:
+            return await msg.answer("Нужна сумма, например <code>500</code>")
+        data = await state.get_data()
+        await state.clear()
+        before = ui.game._achieved(ui.today())
+        try:
+            it = ui.game.env.ob.put(data["slot"], to_kop(m.group(1), m.group(2)), data["src"], ui.today())
+        except (EnvError, FinError) as e:
+            return await msg.answer(f"⛔ {escape(str(e))}")
+        mark = OB_MARK.get(it["status"], "")
+        text, markup = fu.plans()
+        await msg.answer(f"{mark} <b>{escape(it['title'])}</b>: {rubr(it['balance'])}"
+                         + (" — хватает, можно не думать" if it["status"] in ("ok", "double") else "") + "\n\n" + text,
+                         reply_markup=markup)
+        new = [a for a in ui.game.full_stats(ui.today())["achievements"] if a["done"] and a["key"] not in before]
+        await celebrate(msg, {"level_before": 0, "level_after": 0, "new_achievements": new})
+
+    # ---------- 🎁 новый фонд ----------
+
+    @router.callback_query(F.data == "ob:fund")
+    async def fund_start(cb: CallbackQuery, state: FSMContext):
+        await state.set_state(FundFlow.title)
+        await cb.answer()
+        await cb.message.answer("🎁 <b>Новый фонд</b> — для трат не каждый месяц: праздники, подарки, годовые платежи.\n\n"
+                                "Шаг 1/4 — на что копим? Напиши: <code>Новый год</code>, <code>ДР Сони</code>…")
+
+    @router.message(FundFlow.title, F.text)
+    async def fund_title(msg: Message, state: FSMContext):
+        await state.update_data(title=msg.text.strip()[:60])
+        await state.set_state(FundFlow.target)
+        await msg.answer("Шаг 2/4 — сколько нужно? Например <code>10000</code>")
+
+    @router.message(FundFlow.target, F.text)
+    async def fund_target(msg: Message, state: FSMContext):
+        m = re.match(r"^\s*" + AMOUNT + r"\s*$", msg.text, re.I)
+        if not m:
+            return await msg.answer("Нужна сумма, например <code>10000</code>")
+        await state.update_data(target=to_kop(m.group(1), m.group(2)))
+        await state.set_state(FundFlow.due)
+        await msg.answer("Шаг 3/4 — к какой дате? Например <code>25.12</code>")
+
+    @router.message(FundFlow.due, F.text)
+    async def fund_due(msg: Message, state: FSMContext):
+        d = parse_ddmm(msg.text, ui.today(), future=True)
+        if not d:
+            return await msg.answer("Не понял дату. Пример: <code>25.12</code>")
+        await state.update_data(due=d.isoformat())
+        await state.set_state(None)
+        await msg.answer(f"Шаг 4/4 — {ddmm(d.isoformat())} повторяется каждый год?",
+                         reply_markup=kb([Btn(text="🔁 Каждый год", callback_data="ob:fr:year"),
+                                          Btn(text="1️⃣ Один раз", callback_data="ob:fr:none")]))
+
+    @router.callback_query(F.data.startswith("ob:fr:"))
+    async def fund_repeat(cb: CallbackQuery, state: FSMContext):
+        data = await state.get_data()
+        await state.clear()
+        if not {"title", "target", "due"} <= data.keys():
+            return await cb.answer("Начни заново: 🎁 Новый фонд", show_alert=True)
+        try:
+            it = ui.game.env.ob.add_fund(data["title"], data["target"], date.fromisoformat(data["due"]), ui.today(),
+                                         repeat=cb.data.split(":")[2])
+        except (EnvError, FinError) as e:
+            return await fin_err(cb, e)
+        await cb.answer("🎁 Создан")
+        await edit(cb, f"🎁 <b>{escape(it['title'])}</b>: {rubr(it['target'])} к {ddmm(it['due'])}\n"
+                       f"Буду откладывать ~{rubr(it['per_week'])} в неделю — с каждых денег сам. "
+                       f"За 2 недели закину в банк задачу «выбрать и купить».",
+                   kb([Btn(text="📅 Обязательное", callback_data="fin:plans")]))
 
     return fu

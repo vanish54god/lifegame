@@ -361,3 +361,17 @@ select.pdue { appearance: none; -webkit-appearance: none; text-align: center; te
 .card.alloc { margin-top: 10px; border-color: var(--accent); }
 .alloc-parts { display: flex; flex-wrap: wrap; gap: 6px 12px; margin: 8px 0 12px; }
 .banner.money { border-left-color: var(--money); cursor: pointer; }
+
+/* 📅 Обязательное по ячейкам: зелёный — спокоен, янтарь — копится, красный — не хватает */
+.ob-item { border-left: 4px solid var(--line); }
+.ob-item.ob-ok, .ob-item.ob-double { border-left-color: var(--good); background: linear-gradient(90deg, rgba(143,209,138,.08), transparent 60%), var(--surface); }
+.ob-item.ob-progress { border-left-color: var(--accent); }
+.ob-item.ob-late { border-left-color: var(--bad); background: linear-gradient(90deg, rgba(224,97,79,.09), transparent 60%), var(--surface); }
+.ob-badge { font: 700 11px var(--cond); letter-spacing: .06em; text-transform: uppercase; padding: 2px 6px; border-radius: 4px; white-space: nowrap; }
+.ob-ok .ob-badge, .ob-double .ob-badge { color: var(--good); background: rgba(143,209,138,.12); }
+.ob-progress .ob-badge { color: var(--accent); background: rgba(240,165,58,.12); }
+.ob-late .ob-badge { color: var(--bad); background: rgba(224,97,79,.12); }
+.ob-sum { font: 700 16px var(--cond); white-space: nowrap; }
+.ob-actions { margin-top: 10px; gap: 6px; }
+.ob-status { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.ob-dots { letter-spacing: 2px; }

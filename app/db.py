@@ -136,8 +136,13 @@ def _migrate(conn: sqlite3.Connection) -> None:
                      ("timer_sec", "INTEGER NOT NULL DEFAULT 0"), ("pace", "TEXT")]:
         if col not in qcols:
             conn.execute(f"ALTER TABLE quests ADD COLUMN {col} {typ}")
-    if "envelope" not in _columns(conn, "fin_tx"):
+    tcols = _columns(conn, "fin_tx")
+    if "envelope" not in tcols:
         conn.execute("ALTER TABLE fin_tx ADD COLUMN envelope TEXT")
+    if "slot" not in tcols:
+        conn.execute("ALTER TABLE fin_tx ADD COLUMN slot TEXT")
+    if "slot" not in _columns(conn, "env_moves"):
+        conn.execute("ALTER TABLE env_moves ADD COLUMN slot TEXT")
     if "est_min" not in _columns(conn, "templates"):
         conn.execute("ALTER TABLE templates ADD COLUMN est_min INTEGER")
     conn.commit()

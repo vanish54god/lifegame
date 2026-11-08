@@ -2,7 +2,8 @@
 💌 Конверты под нерегулярный доход.
 
 Пришли деньги → раскладываем:
-  1. 📅 Обязательное — платежи, которые надо оплатить до следующих денег;
+  1. 📅 Обязательное — по ячейкам (obligations.py): платежи до следующих денег, 🎁 фонды по графику
+     и 10% «на следующий раз»;
   2. 🏦 Копилка — процент сразу в накопления (откладываешь первым, а не «что останется»);
   3. остаток по долям: 🧍 Я / ❤️ Отношения / 🎯 Хотелки.
 
@@ -52,6 +53,8 @@ class Envelopes:
         self.g = game
         self.fin = game.fin
         self.conn = game.conn
+        from .obligations import Obligations
+        self.ob = Obligations(self)
 
     # ---------- настройки ----------
 
@@ -69,10 +72,16 @@ class Envelopes:
             "save_target": int(self._s("env_save_target", "0") or 0),
             "horizon": int(self._s("env_horizon", "14")),
             "reserve": self._s("env_reserve", "next"),     # next — до следующих денег, month — на месяц вперёд
+            "ahead_pct": int(self._s("env_ahead_pct", "10")),   # с каждого дохода — на следующие платежи
         }
 
     def save_settings(self, shares: dict | None = None, save_pct: int | None = None,
-                      save_target: int | None = None, horizon: int | None = None, reserve: str | None = None) -> dict:
+                      save_target: int | None = None, horizon: int | None = None, reserve: str | None = None,
+                      ahead_pct: int | None = None) -> dict:
+        if ahead_pct is not None:
+            if not 0 <= ahead_pct <= 50:
+                raise EnvError("На следующие платежи — от 0 до 50%")
+            self.g.set_setting("env_ahead_pct", str(ahead_pct))
         if reserve is not None:
             if reserve not in ("next", "month"):
                 raise EnvError("Резерв: next / month")
@@ -154,32 +163,34 @@ class Envelopes:
     # ---------- раскладка ----------
 
     def plan(self, amount: int, today: date) -> dict:
-        """Как разложить сумму. Ничего не меняет — только считает."""
+        """Как разложить сумму. Деньги не трогает (только разносит общий запас «Обязательного» по ячейкам)."""
         if amount <= 0:
             raise EnvError("Нечего раскладывать")
         st = self.settings()
-        nxt = self.next_income(today)
-        horizon = 30 if st["reserve"] == "month" else (max(nxt["days_left"], 7) if nxt else 30)
-        until = today + timedelta(days=horizon)
-        need = sum(p["amount"] for p in self.fin.plans(today) if p["due"] <= until.isoformat())
-        oblig = min(amount, max(0, need - self.balance("oblig")))
+        self.ob.sync(today)
+        until, _ = self.ob.horizon(today)
+        al = self.ob.allocate(amount, today, ahead_cap=round(amount * st["ahead_pct"] / 100))
+        oblig = sum(al["slots"].values())
         rest = amount - oblig
         save = round(rest * st["save_pct"] / 100)
         rest -= save
         parts = {k: rest * st["shares"][k] // 100 for k in SPEND_ENVS}
         parts["me"] += rest - sum(parts.values())          # копейки-остаток — в «Я»
-        return {"amount": amount, "oblig": oblig, "oblig_need": need, "save": save, **parts,
-                "save_pct": st["save_pct"], "shares": st["shares"], "until": until.isoformat()}
+        return {"amount": amount, "oblig": oblig, "oblig_now": al["now"], "funds": al["funds"], "ahead": al["ahead"],
+                "slots": al["slots"], "funds_short": al["short"], "save": save, **parts, "save_pct": st["save_pct"], "ahead_pct": st["ahead_pct"],
+                "shares": st["shares"], "until": until.isoformat()}
 
     def apply(self, amount: int, today: date, plan: dict | None = None) -> dict:
-        """Разложить. Копилка — настоящий перевод в накопления, остальное — в конверты."""
+        """Разложить. Копилка — настоящий перевод в накопления, обязательное — по ячейкам, остальное — в конверты."""
         if amount > self.unallocated():
             raise EnvError("Столько неразложенных денег нет")
         p = plan or self.plan(amount, today)
-        if sum(p[k] for k in ("oblig", "save", *SPEND_ENVS)) != amount:
+        if sum(p[k] for k in ("oblig", "save", *SPEND_ENVS)) != amount or sum(p["slots"].values()) != p["oblig"]:
             raise EnvError("Части не сходятся с суммой")
         before = self.g._achieved(today)
-        for env in ("oblig", *SPEND_ENVS):
+        for slot, x in p["slots"].items():
+            self.ob._ins("oblig", slot, x, today, "раскладка")
+        for env in SPEND_ENVS:
             if p[env]:
                 self.conn.execute("INSERT INTO env_moves (day, env, amount, note) VALUES (?, ?, ?, 'раскладка')",
                                   (today.isoformat(), env, p[env]))
@@ -187,6 +198,7 @@ class Envelopes:
             self.fin.saving_move(self._save_target(), p["save"], today)
         self.g.set_setting("env_on", "1")
         self.conn.commit()
+        self.ob.tick(today)
         self.refresh_today(today)
         new = [a for a in self.g.full_stats(today)["achievements"] if a["done"] and a["key"] not in before]
         return {**p, "balances": self.balances(), "new_achievements": new}
@@ -201,28 +213,39 @@ class Envelopes:
         return sid
 
     def obligations(self, today: date) -> dict:
-        """Обязательные траты целиком: сколько в месяц, сколько отложено, сколько нужно до следующих денег."""
-        items, month = [], 0
-        until30 = (today + timedelta(days=30)).isoformat()
-        for p in self.fin.plans(today):
-            per_month = p["amount"] if p["repeat"] == "month" else round(p["amount"] * 30 / 7) if p["repeat"] == "week" \
-                else (p["amount"] if p["due"] <= until30 else 0)
-            month += per_month
-            items.append({**p, "per_month": per_month})
-        days, nxt = self.days_left(today)
-        horizon = 30 if self.settings()["reserve"] == "month" else (max(days, 7) if nxt else 30)
-        until = (today + timedelta(days=horizon)).isoformat()
-        need_now = sum(p["amount"] for p in items if p["due"] <= until)
-        reserved = self.balance("oblig")
-        return {"items": items, "month_total": month, "need_now": need_now, "until": until,
-                "reserved": reserved, "gap": max(0, need_now - reserved), "month_gap": max(0, month - reserved)}
+        """Обязательное целиком: каждый платёж и фонд со своими деньгами и подсветкой."""
+        return self.ob.summary(today)
+
+    def release(self, amount: int, today: date, note: str) -> None:
+        """Забрать деньги из «Обязательного»: сначала общий запас, потом то, до чего дальше всего."""
+        bal = self.ob.balances()
+        left = amount
+        x = min(left, max(0, bal.get(None, 0)))
+        if x:
+            self.ob._ins("oblig", None, -x, today, note)
+            left -= x
+        items = self.ob.items(today, bal)
+        later = sorted((i for i in items if not i["now"]), key=lambda i: i["due"], reverse=True)
+        soon = sorted((i for i in items if i["now"]), key=lambda i: i["due"], reverse=True)
+        for i in later + soon:
+            if left <= 0:
+                break
+            x = min(left, max(0, i["balance"]))
+            if x:
+                self.ob._ins("oblig", i["slot"], -x, today, note)
+                left -= x
+        if left > 0:
+            self.ob._ins("oblig", None, -left, today, note)
 
     def reset(self, today: date) -> dict:
         """Обнулить конверты (деньги вернутся в «неразложенные») — если всё разъехалось, разложить заново."""
         for env, bal in self.balances().items():
-            if bal:
+            if bal and env != "oblig":
                 self.conn.execute("INSERT INTO env_moves (day, env, amount, note) VALUES (?, ?, ?, 'сброс')",
                                   (today.isoformat(), env, -bal))
+        for slot, bal in self.ob.balances().items():
+            if bal:
+                self.ob._ins("oblig", slot, -bal, today, "сброс")
         self.conn.commit()
         self.refresh_today(today)
         return self.balances()
@@ -238,7 +261,9 @@ class Envelopes:
         avail = self.unallocated() if src == "free" else self.balance(src)
         if amount > avail:
             raise EnvError("В конверте столько нет")
-        if src != "free":
+        if src == "oblig":
+            self.release(amount, today, "перекладка")
+        elif src != "free":
             self.conn.execute("INSERT INTO env_moves (day, env, amount, note) VALUES (?, ?, ?, 'перекладка')",
                               (today.isoformat(), src, -amount))
         if dst == "save":
@@ -249,6 +274,8 @@ class Envelopes:
                               (today.isoformat(), dst, amount))
         self.g.set_setting("env_on", "1")
         self.conn.commit()
+        if dst == "oblig":
+            self.ob.distribute(today)
         self.refresh_today(today)
         return self.balances()
 
@@ -256,10 +283,22 @@ class Envelopes:
         t = self.fin.tx(tx_id)
         if t["kind"] != "out" or t["source"] != "manual":
             raise EnvError("Конверт меняется только у обычных трат")
-        if env not in SPEND_ENVS:
-            raise EnvError("Конверт: Я / Отношения / Хотелки")
-        self.conn.execute("UPDATE fin_tx SET envelope = ? WHERE id = ?", (env, tx_id))
+        if env.startswith("f") and env[1:].isdigit():          # 🎁 из фонда
+            f = self.ob.fund(int(env[1:]))
+            if not f["active"]:
+                raise EnvError("Фонд уже закрыт")
+            if t.get("slot") != env:
+                took = self.ob.ensure(env, t["amount"], date.fromisoformat(t["day"]), f"трата: {t['note'] or f['title']}")
+                if any(x["src"] == "none" for x in took):
+                    self.conn.rollback()
+                    raise EnvError(f"В фонде «{f['title']}» и в конвертах не хватает денег")
+                self.conn.execute("UPDATE fin_tx SET envelope = 'oblig', slot = ? WHERE id = ?", (env, tx_id))
+        elif env in SPEND_ENVS:
+            self.conn.execute("UPDATE fin_tx SET envelope = ?, slot = NULL WHERE id = ?", (env, tx_id))
+        else:
+            raise EnvError("Конверт: Я / Отношения / Хотелки или фонд")
         self.conn.commit()
+        self.refresh_today(date.fromisoformat(t["day"]))
         return self.fin.tx(tx_id)
 
     # ---------- лимит, прогноз, награды ----------
@@ -305,6 +344,7 @@ class Envelopes:
 
     def budget(self, today: date) -> dict:
         """Всё для экрана «Деньги»: сколько можно сегодня, до следующих денег, прогноз."""
+        ob = self.obligations(today)
         bal = self.balances()
         days, nxt = self.days_left(today)
         lim = self.today_limit(today) if self.on else 0
@@ -318,8 +358,9 @@ class Envelopes:
             "per_day_now": max(0, spendable // days // 100 * 100),
             "want": bal["want"], "oblig": bal["oblig"], "balances": bal,
             "unallocated": self.unallocated(), "avg_daily": avg, "forecast": forecast,
-            "oblig_need": self.obligations(today)["need_now"],
-            "oblig_month": self.obligations(today)["month_total"],
+            "oblig_need": ob["need_now"], "oblig_month": ob["month_total"], "oblig_gap": ob["gap"],
+            "oblig_green": ob["green"], "oblig_total": ob["total"], "oblig_late": ob["late"],
+            "oblig_all_ok": ob["all_ok"],
             "saved_month": self.saved_month(today),
         }
 
@@ -377,7 +418,8 @@ class Envelopes:
         shares["me"] += 100 - sum(shares.values())
         return {"shares": shares, "count": count, "since": first}
 
-    def counts(self) -> dict:
+    def counts(self, today: date | None = None) -> dict:
         q = lambda sql: self.conn.execute(sql).fetchone()[0]
-        return {"allocations": q("SELECT COUNT(DISTINCT day || created_at) FROM env_moves WHERE note='раскладка'"),
-                "saved_total": sum(s["current"] for s in self.fin.savings())}
+        out = {"allocations": q("SELECT COUNT(DISTINCT day || created_at) FROM env_moves WHERE note='раскладка'"),
+               "saved_total": sum(s["current"] for s in self.fin.savings()), **self.ob.counts(today or date.today())}
+        return out

@@ -150,6 +150,8 @@ CREATE TABLE IF NOT EXISTS fin_tx (
     in_limit   INTEGER NOT NULL DEFAULT 1,   -- считается ли в дневной лимит
     source     TEXT    NOT NULL DEFAULT 'manual',  -- manual / shift / plan / wish / saving
     ref_id     INTEGER,
+    envelope   TEXT,
+    slot       TEXT,                         -- ячейка «Обязательного»: p<id> платёж / f<id> фонд
     created_at TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_fin_tx_day ON fin_tx(day);
@@ -161,6 +163,7 @@ CREATE TABLE IF NOT EXISTS env_moves (
     env        TEXT    NOT NULL,             -- oblig / me / rel / want
     amount     INTEGER NOT NULL,             -- копейки, со знаком
     note       TEXT    NOT NULL DEFAULT '',
+    slot       TEXT,                         -- в «Обязательном»: на какой платёж/фонд (пусто — общий запас)
     created_at TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -204,6 +207,22 @@ CREATE TABLE IF NOT EXISTS planned (
     repeat   TEXT    NOT NULL DEFAULT 'none',   -- none / week / month
     category TEXT    NOT NULL DEFAULT 'other',
     active   INTEGER NOT NULL DEFAULT 1
+);
+
+-- 🎁 Фонды: обязательные траты не каждый месяц (праздники, подарки, годовые платежи)
+CREATE TABLE IF NOT EXISTS funds (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    title       TEXT    NOT NULL,
+    target      INTEGER NOT NULL,
+    due         TEXT    NOT NULL,
+    repeat      TEXT    NOT NULL DEFAULT 'none',   -- none / year
+    category    TEXT    NOT NULL DEFAULT 'gifts',
+    remind      INTEGER NOT NULL DEFAULT 1,        -- за 2 недели закинуть в банк «выбрать подарок»
+    created_day TEXT    NOT NULL,
+    full_day    TEXT,                              -- когда набралась вся сумма (в этом цикле)
+    task_day    TEXT,                              -- к какому сроку уже создана задача в банке
+    ontime      INTEGER NOT NULL DEFAULT 0,        -- сколько раз набрался к сроку
+    active      INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS wishes (
@@ -278,7 +297,7 @@ class Finance:
 
     def add_tx(self, day: date, kind: str, amount: int, category: str | None = None, note: str = "",
                in_limit: bool | None = None, source: str = "manual", ref_id: int | None = None,
-               envelope: str | None = None) -> dict:
+               envelope: str | None = None, slot: str | None = None) -> dict:
         if kind not in ("in", "out", "move"):
             raise FinError("Неизвестный тип операции")
         if kind != "move" and amount <= 0:
@@ -291,15 +310,23 @@ class Finance:
             category = category if category in OUT_KEYS else guess_cat(note, "out")
         if in_limit is None:
             in_limit = kind == "out" and source == "manual"
+        fund = None
         if envelope is None and kind == "out" and source == "manual":
             from .envelopes import default_envelope
             envelope = default_envelope(category)
+            if self._env_on():
+                fund = self.game.env.ob.match_fund(category, day)   # подарок около ДР — сразу из фонда
         cur = self.conn.execute(
-            "INSERT INTO fin_tx (day, kind, amount, category, note, in_limit, source, ref_id, envelope) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO fin_tx (day, kind, amount, category, note, in_limit, source, ref_id, envelope, slot) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (day.isoformat(), kind, amount, category or "move", note.strip()[:200], int(in_limit), source, ref_id,
-             envelope))
+             envelope, slot))
         self.conn.commit()
+        if fund:
+            try:
+                return self.game.env.set_tx_envelope(cur.lastrowid, f"f{fund}")
+            except Exception:
+                pass
         return self.tx(cur.lastrowid)
 
     def tx(self, tx_id: int) -> dict:
@@ -308,15 +335,18 @@ class Finance:
             raise FinError("Такой операции нет")
         return self._tx(row)
 
-    @staticmethod
-    def _tx(row) -> dict:
+    def _tx(self, row) -> dict:
         from .envelopes import ENVS
         d = dict(row)
         c = CATS.get(d["category"])
         d["cat_title"] = c.title if c else "Перевод"
         d["emoji"] = c.emoji if c else "🔄"
-        env = ENVS.get(d.get("envelope") or "")
-        d["env_emoji"], d["env_title"] = (env[0], env[1]) if env else ("", "")
+        if d.get("envelope") == "oblig" and d.get("slot"):
+            from .obligations import slot_label
+            d["env_emoji"], d["env_title"] = slot_label(self.conn, d["slot"])
+        else:
+            env = ENVS.get(d.get("envelope") or "")
+            d["env_emoji"], d["env_title"] = (env[0], env[1]) if env else ("", "")
         return d
 
     def set_tx_category(self, tx_id: int, category: str) -> dict:
@@ -520,8 +550,12 @@ class Finance:
         p = self.plan(pid)
         if not p["active"]:
             raise FinError("Платёж уже закрыт")
+        slot, took = f"p{pid}", []
+        if self._env_on():
+            # деньги берутся из ячейки платежа; не хватило — из запаса, неразложенных, Хотелок, Я, Отношений
+            took = self.game.env.ob.ensure(slot, p["amount"], day, f"на платёж: {p['title']}")
         self.add_tx(day, "out", p["amount"], p["category"], p["title"], in_limit=False, source="plan", ref_id=pid,
-                    envelope="oblig")
+                    envelope="oblig", slot=slot)
         due = date.fromisoformat(p["due"])
         if p["repeat"] == "month":
             self.conn.execute("UPDATE planned SET due = ? WHERE id = ?", (_add_months(due, 1).isoformat(), pid))
@@ -530,7 +564,15 @@ class Finance:
         else:
             self.conn.execute("UPDATE planned SET active = 0 WHERE id = ?", (pid,))
         self.conn.commit()
-        return self.plan(pid)
+        if self._env_on():
+            ob = self.game.env.ob
+            left = ob.slot_balance(slot)
+            if p["repeat"] == "none" and left:
+                ob._transfer(slot, None, left, day, "остаток платежа")   # разовый — остаток в общий запас
+                self.conn.commit()
+            ob.distribute(day)
+            self.game.env.refresh_today(day)
+        return {**self.plan(pid), "took": [x for x in took if x["amount"]], "paid": p["amount"]}
 
     def edit_plan(self, pid: int, title=None, amount=None, due: date | None = None, repeat=None) -> dict:
         p = self.plan(pid)
@@ -540,9 +582,14 @@ class Finance:
         self.conn.commit()
         return self.plan(pid)
 
-    def delete_plan(self, pid: int) -> None:
+    def delete_plan(self, pid: int, day: date | None = None) -> None:
+        """Удалить платёж: отложенное на него вернётся в неразложенные."""
         self.plan(pid)
         self.conn.execute("UPDATE planned SET active = 0 WHERE id = ?", (pid,))
+        if self._env_on():
+            left = self.game.env.ob.slot_balance(f"p{pid}")
+            if left > 0:
+                self.game.env.ob._ins("oblig", f"p{pid}", -left, day or date.today(), "платёж удалён")
         self.conn.commit()
 
     # ---------- карта желаний ----------
@@ -591,10 +638,17 @@ class Finance:
             raise FinError("Неизвестный конверт")
         if amount > env.balance(src):
             raise FinError(f"В конверте «{ENVS[src][1]}» только {rub(max(0, env.balance(src)))} — переложи из другого")
+        if src == "oblig":
+            env.release(amount, day, what)
+            return
         self.conn.execute("INSERT INTO env_moves (day, env, amount, note) VALUES (?, ?, ?, ?)",
                           (day.isoformat(), src, -amount, what))
 
     def _env_give(self, dst: str, amount: int, day: date, what: str) -> None:
+        if dst == "oblig":
+            self.conn.execute("INSERT INTO env_moves (day, env, amount, note) VALUES (?, ?, ?, ?)",
+                              (day.isoformat(), dst, amount, what))       # в общий запас — бот разнесёт сам
+            return
         if dst != "free":
             self.conn.execute("INSERT INTO env_moves (day, env, amount, note) VALUES (?, ?, ?, ?)",
                               (day.isoformat(), dst, amount, what))

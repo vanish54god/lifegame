@@ -135,6 +135,8 @@ ACHIEVEMENTS = [
     ("dream", "🌠", "Мечта сбылась", "Исполни желание из карты желаний", False),
     ("envelope1", "💌", "По конвертам", "Впервые разложи деньги по конвертам", False),
     ("saver10k", "🏦", "Подушка", "10 000 ₽ в накоплениях", False),
+    ("fund_ontime", "🎁", "Всё по плану", "Фонд набрался к своему сроку", False),
+    ("allgreen", "🟢", "Всё под контролем", "Все обязательные платежи закрыты заранее (хотя бы 3)", False),
     # --- банк заданий и время ---
     ("boss", "💀", "Победил босса", "Выполни задачу сложности «Босс»", False),
     ("early5", "⏳", "Заранее", "5 задач из банка закрыто за 3+ дня до дедлайна", False),
@@ -165,6 +167,7 @@ ACHIEVEMENTS = [
     ("payday", "💰", "Зарплатный день", "Получил оплату сразу за 5 смен", True),
     ("longhaul", "🦥", "Долгострой", "Закрыл задачу, которая пролежала в банке 30+ дней", True),
     ("deep", "🧘", "Глубокое погружение", "3 часа на таймере за один квест", True),
+    ("double", "🛡", "С запасом", "На каждый повторяющийся платёж отложено на два раза вперёд", True),
 ]
 
 
@@ -653,7 +656,7 @@ class Game:
         n_templates = self.conn.execute("SELECT COUNT(*) FROM templates").fetchone()[0]
         ps = self.promise_stats(today)
         fc = self.fin.counts()
-        ec = self.env.counts()
+        ec = self.env.counts(today)
         bc = self.planner.counts()
         pc = self.planner.pace_counts()
         hd, hw = self.life.best_habit_streaks(today)
@@ -724,6 +727,7 @@ class Game:
             "inlimit7": max(self.fin.limit_streak(today), self.env.limit_streak(today)) >= 7,
             "dream": fc["wishes_done"] >= 1,
             "envelope1": ec["allocations"] >= 1, "saver10k": ec["saved_total"] >= 1_000_000,
+            "fund_ontime": ec["funds_ontime"] >= 1, "allgreen": ec["allgreen"], "double": ec["double"],
             "payday": fc["max_payout_shifts"] >= 5,
             "boss": bc["boss"] >= 1, "early5": bc["early"] >= 5, "firefighter": bc["fire"] >= 1,
             "splitter": bc["split"] >= 5, "bank_empty": bc["open"] == 0 and bc["done"] >= 10,

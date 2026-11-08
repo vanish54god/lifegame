@@ -45,6 +45,25 @@ class EnvSettings(BaseModel):
     save_target: int | None = None
     horizon: int | None = Field(None, ge=3, le=45)
     reserve: str | None = None
+    ahead_pct: int | None = Field(None, ge=0, le=50)
+
+class SlotMoney(BaseModel):
+    amount: float = Field(gt=0, lt=MAX_RUB)
+    src: str = "free"               # откуда: free / buffer / me / rel / want / p<id> / f<id>; при «забрать» — куда
+
+class FundIn(BaseModel):
+    title: str = Field(max_length=60)
+    target: float = Field(gt=0, lt=MAX_RUB)
+    due: date
+    repeat: str = "none"
+    remind: bool = True
+
+class FundPatch(BaseModel):
+    title: str | None = Field(None, max_length=60)
+    target: float | None = Field(None, gt=0, lt=MAX_RUB)
+    due: date | None = None
+    repeat: str | None = None
+    remind: bool | None = None
 
 class ExpectedIn(BaseModel):
     title: str = Field(max_length=60)
@@ -107,7 +126,8 @@ def add_finance_routes(app: FastAPI, game, today, require_auth) -> None:
     async def meta():
         cats = lambda lst: [{"key": c.key, "title": c.title, "emoji": c.emoji} for c in lst]
         return {"out": cats(OUT_CATS), "in": cats(IN_CATS), "work_types": fin.work_types,
-                "daily_limit": fin.daily_limit, "start_balance": fin.start_balance}
+                "daily_limit": fin.daily_limit, "start_balance": fin.start_balance,
+                "funds": [{"id": f["id"], "slot": f"f{f['id']}", "title": f["title"]} for f in game.env.ob.funds()]}
 
     @app.get("/api/fin/overview", dependencies=auth)
     async def overview():
@@ -188,7 +208,8 @@ def add_finance_routes(app: FastAPI, game, today, require_auth) -> None:
 
     @app.put("/api/fin/envelopes/settings", dependencies=auth)
     async def env_settings(body: EnvSettings):
-        st = game.env.save_settings(body.shares, body.save_pct, body.save_target, body.horizon, body.reserve)
+        st = game.env.save_settings(body.shares, body.save_pct, body.save_target, body.horizon, body.reserve,
+                                    body.ahead_pct)
         game.env.refresh_today(today())
         return st
 
@@ -251,15 +272,50 @@ def add_finance_routes(app: FastAPI, game, today, require_auth) -> None:
 
     @app.post("/api/fin/plans", dependencies=auth)
     async def add_plan(body: PlanIn):
-        return fin.add_plan(body.title, k(body.amount), body.due, body.repeat, body.category)
+        p = fin.add_plan(body.title, k(body.amount), body.due, body.repeat, body.category)
+        if game.env.on:
+            game.env.ob.distribute(today())
+        return p
 
     @app.post("/api/fin/plans/{pid}/pay", dependencies=auth)
     async def pay_plan(pid: int):
-        return fin.pay_plan(pid, today())
+        before = game._achieved(today())
+        r = fin.pay_plan(pid, today())
+        new = [a for a in game.full_stats(today())["achievements"] if a["done"] and a["key"] not in before]
+        return {**r, "new_achievements": new}
 
     @app.delete("/api/fin/plans/{pid}", dependencies=auth)
     async def del_plan(pid: int):
-        fin.delete_plan(pid)
+        fin.delete_plan(pid, today())
+        return {"ok": True}
+
+    # ---------- 📅 обязательное по ячейкам и 🎁 фонды ----------
+
+    def _with_ach(fn):
+        before = game._achieved(today())
+        r = fn()
+        new = [a for a in game.full_stats(today())["achievements"] if a["done"] and a["key"] not in before]
+        return {**r, "new_achievements": new}
+
+    @app.post("/api/fin/oblig/{slot}/put", dependencies=auth)
+    async def slot_put(slot: str, body: SlotMoney):
+        return _with_ach(lambda: game.env.ob.put(slot, k(body.amount), body.src, today()))
+
+    @app.post("/api/fin/oblig/{slot}/take", dependencies=auth)
+    async def slot_take(slot: str, body: SlotMoney):
+        return game.env.ob.take(slot, k(body.amount), body.src, today())
+
+    @app.post("/api/fin/funds", dependencies=auth)
+    async def add_fund(body: FundIn):
+        return game.env.ob.add_fund(body.title, k(body.target), body.due, today(), body.repeat, remind=body.remind)
+
+    @app.patch("/api/fin/funds/{fid}", dependencies=auth)
+    async def patch_fund(fid: int, body: FundPatch):
+        return game.env.ob.edit_fund(fid, today(), body.title, k(body.target), body.due, body.repeat, body.remind)
+
+    @app.delete("/api/fin/funds/{fid}", dependencies=auth)
+    async def del_fund(fid: int):
+        game.env.ob.delete_fund(fid, today())
         return {"ok": True}
 
     # ---------- желания ----------
