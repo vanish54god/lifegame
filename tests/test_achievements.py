@@ -127,7 +127,7 @@ def test_mark_reports_secret(game):
     q, _ = game.add_quest(T, C["study"], "x", 777)
     res = game.mark(q.id, "done", T)
     sec = [a for a in res["new_achievements"] if a["secret"]]
-    assert sec and sec[0]["title"] == "Джекпот"
+    assert any(a["title"] == "Джекпот" for a in sec)        # ночью тут же может открыться и «Ночная смена»
 
 
 def test_done_at_uses_tz():

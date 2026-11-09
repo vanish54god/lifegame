@@ -112,6 +112,8 @@ class FinUI:
             b = env.budget(t)
             lim, spent = b["limit"], b["spent_today"]
             line = f"Сегодня: <b>{rub(spent)}</b> / {rub(lim)}  {progress_bar(min(spent, lim), max(lim, 1), 8)}"
+            line += (f"\n<i>= (🧍 {rubr(b['pool_me'])} + ❤️ {rubr(b['pool_rel'])}"
+                     + (f" + сегодня {rubr(spent)}" if spent else "") + f") ÷ {b['days_left']} дн</i>")
             if spent > lim:
                 line += f"\n⚠️ Больше лимита на {rub(spent - lim)} — завтрашний станет меньше"
             return line

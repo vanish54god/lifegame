@@ -262,3 +262,25 @@ def test_redistribute_everything_after_new_payments(game):
     assert sum(e.balances().values()) == pr["total"] and e.unallocated() == 0   # ни копейки не потерялось
     assert sum(s["current"] for s in f.savings()) == saved                      # копилки не тронуты
     assert r["obligations"]["gap"] == 0
+
+
+def test_daily_limit_is_live_and_formula(game):
+    f, e = game.fin, game.env
+    income(game, 1000000)
+    b = e.budget(T)
+    assert b["limit"] == (b["pool_me"] + b["pool_rel"]) // 7 // 100 * 100          # до карманных 7 дней
+    lim = b["limit"]
+    f.add_tx(T, "out", 50000, "food")                                             # трата сегодня лимит не меняет
+    assert e.budget(T)["limit"] == lim
+    f.add_tx(T - timedelta(days=1), "out", 140000, "food")                        # задним числом — меняет сразу
+    assert e.budget(T)["limit"] < lim
+
+
+def test_income_day_does_not_give_whole_pool(game):
+    f, e = game.fin, game.env
+    pay = T + timedelta(days=7)
+    income(game, 1000000)
+    f.add_tx(pay, "in", 1000000, note="карманные пришли")                         # в день карманных
+    e.apply(1000000, pay)
+    days, nxt = e.days_left(pay)
+    assert days > 25                                                              # считаем до следующих, а не «1 день»

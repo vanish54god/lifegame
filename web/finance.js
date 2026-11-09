@@ -65,6 +65,7 @@ function envCard(e) {
       <div class="row"><div class="stat-label">Можно сегодня</div><span class="spacer"></span>${e.streak ? `<span class="tag">🛡 ${e.streak} дн в лимите</span>` : ""}</div>
       <div class="wallet-num" style="text-align:left;${left < 0 ? "color:var(--bad)" : ""}">${rubR(Math.max(0, left))}</div>
       <div class="muted small">${left < 0 ? `больше лимита на ${rubR(-left)} · ` : ""}потрачено ${rubR(e.spent_today)} из ${rubR(e.limit)} · ${until}</div>
+      <div class="muted small" style="margin-top:2px">= (🧍 ${rubR(e.pool_me)} + ❤️ ${rubR(e.pool_rel)}${e.spent_today ? ` + сегодня потрачено ${rubR(e.spent_today)}` : ""}) ÷ ${e.days_left} дн</div>
       <div style="margin:8px 0">${bar(e.spent_today, Math.max(e.limit, 1))}</div>
       <div class="small">${e.forecast >= 0 ? `🔮 К следующим деньгам останется ~<b>${rubR(e.forecast)}</b>` : `⚠️ В текущем темпе не хватит <b>${rubR(-e.forecast)}</b> — притормози`}</div>
       ${obLine(e)}

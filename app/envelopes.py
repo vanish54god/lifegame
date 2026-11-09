@@ -142,13 +142,16 @@ class Envelopes:
     def expected(self, today: date) -> list[dict]:
         """Ближайшие поступления. Ежемесячные сами переезжают на следующий месяц, разовые — исчезают."""
         out = []
+        # деньги уже пришли сегодня — значит, сегодняшнее поступление не «следующее»
+        got_today = self.conn.execute("SELECT 1 FROM fin_tx WHERE kind='in' AND day = ? LIMIT 1",
+                                      (today.isoformat(),)).fetchone() is not None
         for r in self.conn.execute("SELECT * FROM expected_income WHERE active = 1"):
             e = dict(r)
             d = date.fromisoformat(e["day"])
             if e["repeat"] == "month":
-                while d < today:
+                while d < today or (d == today and got_today):
                     d = _add_months(d, 1)
-            elif d < today:
+            elif d < today or (d == today and got_today):
                 continue
             e["next"] = d.isoformat()
             e["days_left"] = (d - today).days
@@ -365,13 +368,16 @@ class Envelopes:
         self.conn.commit()
 
     def today_limit(self, today: date) -> int:
+        """Лимит на сегодня — всегда по актуальным деньгам. Свои сегодняшние траты его не меняют (они в формуле
+        прибавляются обратно), а вот трата задним числом, перекладка или новая дата поступления — меняют сразу.
+        Запоминаем последнее значение: по нему вечером подводится итог дня."""
+        lim = self._calc_limit(today)
         row = self.conn.execute("SELECT lim FROM fin_day_limit WHERE day = ?", (today.isoformat(),)).fetchone()
-        if row is None:
-            lim = self._calc_limit(today)
-            self.conn.execute("INSERT OR IGNORE INTO fin_day_limit (day, lim) VALUES (?, ?)", (today.isoformat(), lim))
+        if row is None or row["lim"] != lim:
+            self.conn.execute("INSERT INTO fin_day_limit (day, lim) VALUES (?, ?) "
+                              "ON CONFLICT(day) DO UPDATE SET lim = excluded.lim", (today.isoformat(), lim))
             self.conn.commit()
-            return lim
-        return row["lim"]
+        return lim
 
     def avg_daily(self, today: date, days: int = 14) -> int:
         start = (today - timedelta(days=days)).isoformat()
@@ -392,6 +398,7 @@ class Envelopes:
         forecast = spendable + bal["want"] - avg * days
         return {
             "on": self.on, "limit": lim, "spent_today": spent, "left_today": lim - spent,
+            "pool": sum(bal[k] for k in DAILY_ENVS) + spent, "pool_me": bal["me"], "pool_rel": bal["rel"],
             "days_left": days, "next_income": nxt, "spendable": spendable,
             "per_day_now": max(0, spendable // days // 100 * 100),
             "want": bal["want"], "oblig": bal["oblig"], "balances": bal,
