@@ -575,7 +575,7 @@ function barChart(el, { labels, values, planned, tips, showEvery = 1 }) {
   el.innerHTML = svg;
 }
 
-const HEAT = ["var(--surface-2)", "#4a3413", "#7d5515", "#b8791c", "#f0a53a"];
+const HEAT = ["var(--surface-2)", "var(--cal1)", "var(--cal2)", "var(--cal3)", "var(--cal4)"];
 function heatLevel(xp) { return xp <= 0 ? 0 : xp < 200 ? 1 : xp < 500 ? 2 : xp < 900 ? 3 : 4; }
 
 async function renderStats() {
@@ -594,7 +594,7 @@ async function renderStats() {
     </div>
 
     <div class="h2">XP по дням</div>
-    <div class="row"><div class="legend"><span><i style="background:var(--accent)"></i>получено</span><span><i style="background:var(--surface-2);border:1px solid #3a4046"></i>было в плане</span></div>
+    <div class="row"><div class="legend"><span><i style="background:var(--accent)"></i>получено</span><span><i style="background:var(--surface-2);border:1px solid var(--chart-line)"></i>было в плане</span></div>
       <span class="spacer"></span>
       <div class="chips">${[14, 30].map(n => `<button class="chip ${state.chartDays === n ? "on" : ""}" data-act="chartDays" data-n="${n}">${n} дн</button>`).join("")}</div></div>
     <div id="ch-days"></div>
@@ -764,12 +764,33 @@ actions.refund = async el => {
   await renderShop();
 };
 
+// ================= Тема =================
+const THEMES = [
+  ["auto", "Авто", ["#fff6ef", "#e2588f", "#0d0f11", "#f0a53a"]],
+  ["vice", "Vice City", ["#fff6ef", "#e2588f", "#23977a"]],
+  ["night", "Ночной город", ["#0d0f11", "#f0a53a", "#8fd18a"]],
+];
+function themePicker() {
+  const cur = window.LGTheme ? LGTheme.get() : "auto";
+  return `<div class="theme-pick">${THEMES.map(([k, title, sw]) => `<button class="${k === cur ? "on" : ""}" data-act="setTheme" data-k="${k}">
+    <span class="sw">${sw.map(c => `<i style="background:${c};border:1px solid var(--line)"></i>`).join("")}</span>
+    <span class="small">${title}</span></button>`).join("")}</div>`;
+}
+actions.setTheme = el => {
+  LGTheme.set(el.dataset.k);
+  document.querySelectorAll(".theme-pick button").forEach(b => b.classList.toggle("on", b.dataset.k === el.dataset.k));
+};
+
 // ================= Экран: Настройки =================
 
 async function renderSettings() {
   const [st, , habitsBlock] = await Promise.all([api("GET", "/settings"), loadHud(), habitsSettingsHtml()]);
   const m = state.meta;
   view.innerHTML = `<div class="h1">Настройки</div>
+
+    <div class="h2">🎨 Тема</div>
+    <div class="card">${themePicker()}
+      <p class="muted small" style="margin-bottom:0">«Авто»: днём, пока ты игрок, — светлый Vice City, с 20:00 до 6:00, в режиме админа, — ночной город. Тема запоминается на этом устройстве.</p></div>
 
     <div class="h2">⏰ Время</div>
     <form class="card" data-submit="saveSettings">
