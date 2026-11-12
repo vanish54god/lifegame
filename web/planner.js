@@ -254,7 +254,10 @@ STATS.week = async () => {
   const r = await api("GET", "/review");
   const a = r.this, b = r.last, rt = r.rating;
   const tile = (label, val, sub) => `<div class="tile"><div class="stat-label">${label}</div><div class="stat-value">${val}</div><div class="stat-sub">${sub}</div></div>`;
-  let html = `<div class="h1">Статистика</div>` + statsTabs() + `<div class="muted small" style="margin-bottom:8px">Неделя с ${ddmm(r.week_start)} · сравнение с прошлой</div>
+  let html = `<div class="h1">Статистика</div>` + statsTabs() + `
+    <div class="row" style="gap:8px;margin:6px 0 10px"><button class="btn btn-sm" data-act="briefOpen">📰 Брифинг недели</button>
+      <button class="btn btn-sm" data-act="recapOpen">🏁 Итоги недели</button></div>
+    <div class="muted small" style="margin-bottom:8px">Неделя с ${ddmm(r.week_start)} · сравнение с прошлой</div>
     <div class="tiles">
       ${tile("XP", fmt(a.xp), cmp(a.xp, b.xp))}
       ${tile("Квестов", `${a.quests_done}<span class="muted" style="font-size:16px">/${a.quests_total}</span>`, cmp(a.quests_done, b.quests_done))}

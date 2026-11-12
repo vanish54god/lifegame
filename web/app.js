@@ -103,6 +103,9 @@ function celebrate(res, quest) {
   for (const a of res.new_achievements || []) {
     toast(`${a.secret ? "🤫 <b>Секретное достижение!</b>" : "🏆 <b>Достижение:</b>"} ${a.emoji} ${esc(a.title)}`, "ach");
   }
+  // 💪 навыки растут сами — после любой награды проверяем, не вырос ли какой
+  api("GET", "/skills/ups").then(ups => ups.forEach(s =>
+    toast(`💪 ${s.emoji} <b>${esc(s.title)} +${s.gain}</b> · ${s.level} ур.`, "ach"))).catch(() => {});
 }
 
 // Подсказки для графиков: наведи мышкой или тапни
@@ -276,6 +279,7 @@ async function renderToday() {
         <button class="btn btn-icon" data-act="pday" data-n="1" aria-label="Следующий день" ${day > d.today ? "disabled" : ""}>›</button>
       </div>
     </div>`;
+  if (isToday) html += await weekCardsHtml(d.today);
   html += storyStripHtml(story) + schedTodayHtml(sched) + studyHtml(marks);
   if (plan) html += startByHtml(plan.start_by);
   if (money && money.on) {
@@ -585,7 +589,7 @@ function heatLevel(xp) { return xp <= 0 ? 0 : xp < 200 ? 1 : xp < 500 ? 2 : xp <
 
 async function renderStats() {
   if (state.statsTab && state.statsTab !== "main") { await loadHud(); return STATS[state.statsTab](); }
-  const s = await loadHud();
+  const [s, skills] = await Promise.all([loadHud(), api("GET", "/skills")]);
   const lv = s.level;
   const hist = s.history;
   const rate = s.completion_30 == null ? "—" : s.completion_30 + "%";
@@ -597,6 +601,12 @@ async function renderStats() {
       <div class="tile"><div class="stat-label">Всего XP</div><div class="stat-value">${fmt(s.total_xp)}</div><div class="stat-sub">лучший день ${fmt(s.best_day_xp)}</div></div>
       <div class="tile"><div class="stat-label">За 30 дней</div><div class="stat-value">${rate}</div><div class="stat-sub">квестов выполнено · всего ${fmt(s.quests_done)}</div></div>
     </div>
+    <div class="h2">💪 Навыки</div>
+    <div class="skills">${skills.map(k => `<div class="skill" title="${esc(k.desc)}">
+      <div class="skill-head"><span class="skill-ico">${k.emoji}</span><span class="skill-name">${esc(k.title)}</span>
+        <span class="skill-lvl">${k.level}</span></div>
+      <div class="skill-bar"><div style="width:${k.pct}%"></div></div>
+      <div class="skill-sub">${k.week_xp ? `+${fmt(k.week_xp)} XP за неделю` : esc(k.desc)}</div></div>`).join("")}</div>
 
     <div class="h2">XP по дням</div>
     <div class="row"><div class="legend"><span><i style="background:var(--accent)"></i>получено</span><span><i style="background:var(--surface-2);border:1px solid var(--chart-line)"></i>было в плане</span></div>

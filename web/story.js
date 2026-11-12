@@ -107,9 +107,11 @@ actions.chapterNew = async () => {
 function cutscene(r) {
   return new Promise(resolve => {
     const el = $("#cutscene");
+    $("#cut-passed").textContent = r.label || "Миссия пройдена";
     $("#cut-title").textContent = r.title;
-    $("#cut-outro").textContent = r.outro ? `«${r.outro}»` : "";
-    $("#cut-reward").textContent = `+${fmt(r.xp)} XP  ·  😮‍💨 Респект +1${r.level_after > r.level_before ? `  ·  Уровень ${r.level_after}` : ""}`;
+    $("#cut-outro").textContent = r.outroRaw || (r.outro ? `«${r.outro}»` : "");
+    $("#cut-outro").classList.toggle("list", !!r.outroRaw);
+    $("#cut-reward").textContent = r.reward || `+${fmt(r.xp)} XP  ·  😮‍💨 Респект +1${r.level_after > r.level_before ? `  ·  Уровень ${r.level_after}` : ""}`;
     $("#cut-chapter").textContent = r.chapter || "";
     el.hidden = false;
     el.classList.remove("play"); void el.offsetWidth; el.classList.add("play");
@@ -143,3 +145,75 @@ STATS.story = async () => {
   }
   view.innerHTML = html;
 };
+
+// ---------- 📰 брифинг недели и 🏁 «неделя пройдена» ----------
+const MARKC = { double: "🟢", ok: "🟢", progress: "🟡", late: "🔴" };
+const WDN = ["вс", "пн", "вт", "ср", "чт", "пт", "сб"];
+const wdOf = iso => WDN[parseDay(iso).getDay()];
+const seen = k => { try { return localStorage.getItem(k) === "1"; } catch (e) { return false; } };
+const markSeen = k => { try { localStorage.setItem(k, "1"); } catch (e) { /* ничего */ } };
+
+function briefHtml(b, full) {
+  const L = [];
+  if (b.pair_days.length) L.push(`📚 Пар: <b>${b.pairs_total}</b> · ${b.pair_days.map(d => `${d.wd} ${d.first}`).join(" · ")}`);
+  b.marks.forEach(m => L.push(`${m.emoji} <b>${esc(m.kind_title)}</b> — ${esc(m.subject)}, ${wdOf(m.day)} ${m.start}`));
+  if (b.payments.length) L.push("📅 " + b.payments.map(p => `${MARKC[p.status] || "•"} ${esc(p.title)} ${rubR(p.amount)} (${wdOf(p.due)})`).join(" · "));
+  b.funds.forEach(f => L.push(`🎁 ${esc(f.title)} через ${f.days_left} дн: ${MARKC[f.status]} ${rubR(f.balance)} из ${rubR(f.target)}`));
+  if (b.bank.length) L.push("🗃 " + b.bank.map(t => `${"🔥".repeat(Math.max(0, t.heat - 1))}${esc(t.title)} (${wdOf(t.deadline)})`).join(" · ") + (b.bank_more ? ` и ещё ${b.bank_more}` : ""));
+  if (b.promises_open) L.push(`💌 Открытых обещаний: ${b.promises_open}`);
+  b.story.slice(0, 2).forEach(s => L.push(`🎬 ${esc(s.title)}${s.next ? ` ▸ ${esc(s.next)}` : ""}`));
+  if (!L.length) L.push("Ничего срочного — отличная неделя, чтобы взять что-нибудь из банка 😉");
+  return `<div class="card brief">
+    <div class="row"><div><div class="story-label">Брифинг · неделя ${b.week}</div><div class="story-title">${b.span}</div></div>
+      <span class="spacer"></span>${full ? "" : `<button class="btn btn-sm btn-ghost" data-act="briefHide" data-k="${b.week}" aria-label="Скрыть">✕</button>`}</div>
+    <div class="small" style="margin:4px 0 8px;color:var(--accent);font-weight:700">${b.mood}</div>
+    ${L.map(x => `<div class="brief-line small">${x}</div>`).join("")}</div>`;
+}
+function recapCardHtml(r) {
+  return `<div class="card brief recap" data-act="recapShow">
+    <div class="row"><span style="font-size:24px">🏁</span><div class="q-body"><div class="story-label">Неделя ${r.week}</div>
+      <div class="story-title">Неделя пройдена</div><div class="small muted">${fmt(r.xp)} XP · ${esc(r.verdict)} — смотреть итоги</div></div>
+      <button class="btn btn-sm btn-ghost" data-act="recapHide" data-k="${r.week}" aria-label="Скрыть">✕</button></div></div>`;
+}
+async function weekCardsHtml(day) {
+  const d = parseDay(day), wd = d.getDay(), h = new Date().getHours();
+  let html = "";
+  if ((wd === 0 && h >= 18) || wd === 1) {                                   // воскресенье вечером / понедельник
+    const r = await api("GET", "/week/recap" + (wd === 1 ? "?last=true" : "")).catch(() => null);
+    if (r && r.xp && !seen("recap-" + r.week)) { state.recap = r; html += recapCardHtml(r); }
+  }
+  if (wd === 1 || wd === 2) {
+    const b = await api("GET", "/week/brief").catch(() => null);
+    if (b && !seen("brief-" + b.week)) html += briefHtml(b);
+  }
+  return html;
+}
+actions.briefHide = (el, e) => { e && e.stopPropagation(); markSeen("brief-" + el.dataset.k); return refresh(); };
+actions.recapHide = (el, e) => { e && e.stopPropagation(); markSeen("recap-" + el.dataset.k); return refresh(); };
+actions.recapShow = async el => {
+  const r = state.recap || await api("GET", "/week/recap");
+  await weekCutscene(r);
+  markSeen("recap-" + r.week);
+  await refresh();
+};
+actions.briefOpen = async () => { const b = await api("GET", "/week/brief"); toastHtmlCard(briefHtml(b, true)); };
+actions.recapOpen = async () => { await weekCutscene(await api("GET", "/week/recap")); };
+function toastHtmlCard(html) {
+  const box = document.createElement("div");
+  box.className = "brief-pop";
+  box.innerHTML = html + `<button class="btn wide" style="margin-top:8px">Понял</button>`;
+  box.addEventListener("click", e => { if (e.target.closest("button")) box.remove(); });
+  view.prepend(box);
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+function weekCutscene(r) {
+  const parts = [`✅ ${r.quests_done} квестов · ${r.active_days}/7 активных дней`];
+  if (r.best_day) parts.push(`🏆 лучший день — ${r.best_day.wd}, ${fmt(r.best_day.xp)} XP`);
+  if (r.limit_total) parts.push(`💰 в лимите ${r.limit_days} из ${r.limit_total} дн`);
+  if (r.skills.length) parts.push("💪 " + r.skills.map(k => `${k.emoji} ${k.title} +${fmt(k.week_xp)}`).join(" · "));
+  r.missions.forEach(m => parts.push(`${m.emoji} ${m.title}`));
+  return cutscene({
+    label: "Неделя пройдена", chapter: `Неделя ${r.week} · ${r.span}`, title: r.verdict + (r.delta != null ? ` (${r.delta > 0 ? "+" : ""}${r.delta}%)` : ""),
+    outroRaw: parts.join("\n"), reward: `+${fmt(r.xp)} XP за неделю${r.rating_avg ? `  ·  ⭐ ${r.rating_avg}` : ""}`,
+  });
+}

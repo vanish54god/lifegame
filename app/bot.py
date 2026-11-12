@@ -26,6 +26,7 @@ from .promise_text import parse_promise
 from .bot_finance import K_FIN, K_MONEY, FinUI, days_word, register_finance
 from .bot_planner import K_BANK, PlanUI, register_planner, time_rows
 from .bot_story import register_story, strip_line
+from .bot_weekly import brief_text, recap_text
 from .life import month_bounds
 from .backup import make_backup
 from aiogram.types import FSInputFile
@@ -250,6 +251,10 @@ class UI:
             f"💰 Монеты: <b>{s['coins']}</b>\n\n"
             f"🏆 Достижения: {len(got)}/{len(s['achievements'])} "
             + "".join(a["emoji"] for a in got)
+            + "\n\n💪 <b>Навыки</b>\n"
+            + "\n".join(f"{k['emoji']} {k['title']}: <b>{k['level']}</b> {rules.progress_bar(k['cur'], k['need'], 6)}"
+                        + (f" +{k['week_xp']} за неделю" if k["week_xp"] else "")
+                        for k in self.game.skills.all(self.today()))
         )
 
     def admin_menu(self) -> tuple[str, InlineKeyboardMarkup]:
@@ -412,6 +417,8 @@ def build_router(cfg: Config, game: Game, auth: Auth) -> Router:
         for a in res["new_achievements"]:
             head = "🤫 <b>Секретное достижение!</b>" if a.get("secret") else "🏆 <b>Достижение открыто!</b>"
             await target.answer(f"{head}\n{a['emoji']} <b>{a['title']}</b> — {a['desc']}")
+        for s in game.skills.ups(ui.today()):
+            await target.answer(f"💪 {s['emoji']} <b>{s['title']} +{s['gain']}</b> · теперь {s['level']} ур.")
 
     # ================= Постоянная клавиатура (работает из любого состояния) =================
 
@@ -695,6 +702,11 @@ def build_router(cfg: Config, game: Game, auth: Auth) -> Router:
         nxt = game.study.grades_pending(ui.today())
         if nxt:
             await cb.message.answer(*grade_ask(nxt[0]))
+
+    @router.message(Command("week"))
+    async def cmd_week(msg: Message):
+        await msg.answer(brief_text(game.weekly.brief(ui.today())))
+        await msg.answer(recap_text(game.weekly.recap(ui.today())))
 
     @router.message(Command("schedule"))
     async def cmd_schedule(msg: Message, command: CommandObject):
@@ -1254,6 +1266,19 @@ async def reminders_loop(bot: Bot, cfg: Config, game: Game) -> None:
                     game.set_setting("sent_grades", today_str)
                     m = pend[0]
                     await bot.send_message(cfg.owner_id, *grade_ask(m))
+            # 🏁 неделя пройдена — в воскресенье после 20:00; 📰 брифинг — в понедельник с 8:00
+            wk = now.date().isocalendar()
+            wk_id = f"{wk[0]}-{wk[1]}"
+            if now.weekday() == 6 and now.hour >= 20 and game.get_setting("sent_recap") != wk_id:
+                game.set_setting("sent_recap", wk_id)
+                await bot.send_message(cfg.owner_id, recap_text(game.weekly.recap(ui.today())))
+            if now.weekday() == 0 and now.hour >= 8 and game.get_setting("sent_brief") != wk_id:
+                game.set_setting("sent_brief", wk_id)
+                prev = (now.date() - timedelta(days=7)).isocalendar()
+                if game.get_setting("sent_recap") != f"{prev[0]}-{prev[1]}":   # итоги прошлой не дошли — сначала их
+                    game.set_setting("sent_recap", f"{prev[0]}-{prev[1]}")
+                    await bot.send_message(cfg.owner_id, recap_text(game.weekly.recap(ui.today(), last=True)))
+                await bot.send_message(cfg.owner_id, brief_text(game.weekly.brief(ui.today())))
             # 🚇 пора выходить — один раз в день
             if game.get_setting("sched_leave", "1") == "1" and game.get_setting("sent_leave") != today_str:
                 la = game.schedule.leave_at(now.date())
@@ -1302,6 +1327,7 @@ COMMANDS = [
     BotCommand(command="finance", description="Финансы"),
     BotCommand(command="schedule", description="Расписание пар"),
     BotCommand(command="story", description="Сюжетные миссии"),
+    BotCommand(command="week", description="Брифинг и итоги недели"),
     BotCommand(command="bank", description="Банк заданий"),
     BotCommand(command="web", description="Войти в веб-приложение"),
     BotCommand(command="help", description="Помощь"),

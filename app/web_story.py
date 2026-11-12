@@ -47,6 +47,26 @@ def add_story_routes(app: FastAPI, game, today, require_auth) -> None:
         new = [a for a in game.full_stats(today())["achievements"] if a["done"] and a["key"] not in before]
         return {**r, "level_before": before_lvl, "level_after": game.stats().level.level, "new_achievements": new}
 
+    # ---------- 📰 неделя ----------
+
+    @app.get("/api/week/brief", dependencies=auth)
+    async def week_brief():
+        return game.weekly.brief(today())
+
+    @app.get("/api/week/recap", dependencies=auth)
+    async def week_recap(last: bool = False):
+        return game.weekly.recap(today(), last)
+
+    # ---------- 💪 навыки ----------
+
+    @app.get("/api/skills", dependencies=auth)
+    async def skills():
+        return game.skills.all(today())
+
+    @app.get("/api/skills/ups", dependencies=auth)
+    async def skill_ups():
+        return game.skills.ups(today())
+
     @app.get("/api/story", dependencies=auth)
     async def story():
         return {"active": st.missions("active"), "paused": st.missions("paused"), "chapter": st.chapter(today()),

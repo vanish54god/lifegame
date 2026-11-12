@@ -137,6 +137,9 @@ ACHIEVEMENTS = [
     ("saver10k", "🏦", "Подушка", "10 000 ₽ в накоплениях", False),
     ("fund_ontime", "🎁", "Всё по плану", "Фонд набрался к своему сроку", False),
     ("story1", "🎬", "Миссия пройдена", "Прошёл первую сюжетную миссию", False),
+    ("skill5", "💪", "Прокачка", "Любой навык 5 уровня", False),
+    ("allround", "🧩", "Универсал", "Четыре навыка 5 уровня и выше", False),
+    ("skill20", "👑", "Мастер своего дела", "Любой навык 20 уровня", False),
     ("chapter1", "📖", "Конец главы", "Закрыл главу, в которой были пройденные миссии", False),
     ("study1", "✍️", "Боевое крещение", "Написал первую отмеченную контрольную, тест или лабу", False),
     ("excellent", "🏅", "Отличник", "Три пятёрки за отмеченные работы", False),
@@ -194,6 +197,10 @@ class Game:
         self.study = Study(self)
         from .story import Story
         self.story = Story(self)
+        from .skills import Skills
+        self.skills = Skills(self)
+        from .weekly import Weekly
+        self.weekly = Weekly(self)
         # для умных чек-инов (в памяти; после перезапуска считаем, что ты только что был активен)
         self.last_activity = time.time()
         self.last_checkin = 0.0
@@ -671,6 +678,7 @@ class Game:
         ec = self.env.counts(today)
         sc = self.study.counts()
         stc = self.story.counts()
+        skc = self.skills.counts(today)
         bc = self.planner.counts()
         pc = self.planner.pace_counts()
         hd, hw = self.life.best_habit_streaks(today)
@@ -741,6 +749,7 @@ class Game:
             "inlimit7": max(self.fin.limit_streak(today), self.env.limit_streak(today)) >= 7,
             "dream": fc["wishes_done"] >= 1,
             "envelope1": ec["allocations"] >= 1, "saver10k": ec["saved_total"] >= 1_000_000,
+            "skill5": skc["skill_max"] >= 5, "allround": skc["skills_5"] >= 4, "skill20": skc["skill_max"] >= 20,
             "story1": stc["story_done"] >= 1, "chapter1": stc["chapters_closed"] >= 1,
             "exhale": stc["story_big"] >= 1,
             "study1": sc["marks_done"] >= 1, "excellent": sc["grades5"] >= 3, "exam1": sc["exams_done"] >= 1,
