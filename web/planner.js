@@ -100,7 +100,7 @@ async function renderBank() {
   const [b, pl] = await Promise.all([api("GET", "/bank"), api("GET", "/plan/day/" + day)]);
   const f = state.bankForm;
   const total = b.tasks.reduce((s, x) => s + x.rem_min, 0);
-  let html = adminTabs() + `<p class="muted small" style="margin:4px 0 10px">Все дела, пока они не сделаны. 🔥 — насколько горит: учитывает и дедлайн, и сколько работы осталось.</p>
+  let html = adminTabs() + wantedHtml() + `<p class="muted small" style="margin:4px 0 10px">Все дела, пока они не сделаны. 🔥 — насколько горит: учитывает и дедлайн, и сколько работы осталось.</p>
     <div class="row small" style="margin-bottom:6px"><span>Кладём в: <b>${esc(dayName(day))}, ${ddmm(day)}</b></span><span class="spacer"></span>
       <span class="muted">в банке ~${fmtMin(total)}</span></div>${loadHtml(pl.load)}`;
 
@@ -178,7 +178,8 @@ function adminTabs() {
   return `<div class="h1">Режим админа</div><div class="chips" style="margin:10px 0 6px">
     <button class="chip ${tab === "plan" ? "on" : ""}" data-act="adminTab" data-t="plan">📋 План дня</button>
     <button class="chip ${tab === "bank" ? "on" : ""}" data-act="adminTab" data-t="bank">🗃 Банк</button>
-    <button class="chip ${tab === "story" ? "on" : ""}" data-act="adminTab" data-t="story">🎬 Сюжет</button></div>`;
+    <button class="chip ${tab === "story" ? "on" : ""}" data-act="adminTab" data-t="story">🎬 Сюжет</button>
+    <button class="chip ${tab === "side" ? "on" : ""}" data-act="adminTab" data-t="side">🎲 Побочки</button></div>`;
 }
 actions.adminTab = el => { state.adminTab = el.dataset.t; return renderAdmin(); };
 actions.bOpen = el => { const id = Number(el.dataset.id); state.bankOpen = state.bankOpen === id ? null : id; return renderBank(); };
@@ -237,7 +238,7 @@ actions.bankSub = async form => {
 
 function statsTabs() {
   const tab = state.statsTab || "main";
-  return `<div class="chips" style="margin:10px 0 4px">${[["main", "Обзор"], ["week", "Неделя"], ["cal", "Календарь"], ["season", "Сезоны"], ["story", "🎬 Хроника"]].map(([k, l]) =>
+  return `<div class="chips" style="margin:10px 0 4px">${[["main", "Обзор"], ["week", "Неделя"], ["cal", "Календарь"], ["season", "Сезоны"], ["story", "🎬 Хроника"], ["fun", "📊 Рекорды"]].map(([k, l]) =>
     `<button class="chip ${tab === k ? "on" : ""}" data-act="statsTab" data-t="${k}">${l}</button>`).join("")}</div>`;
 }
 actions.statsTab = el => { state.statsTab = el.dataset.t; return renderStats(); };

@@ -99,4 +99,7 @@ class Weekly:
             "limit_days": lim_days, "limit_total": lim_total, "steps": steps, "missions": missions, "marks_done": marks,
             "skills": [{"emoji": k["emoji"], "title": k["title"], "week_xp": k["week_xp"], "level": k["level"]} for k in skills],
             "rating_avg": cur["rating_avg"], "achievements": len(cur["achievements"]),
+            "sleep": g.sleep.stats(date.fromisoformat(e)), "side_done": q(
+                "SELECT COUNT(*) FROM side_offers o JOIN quests qq ON qq.id=o.quest_id WHERE qq.status='done' "
+                "AND o.day BETWEEN ? AND ?"),
         }

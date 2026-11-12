@@ -27,6 +27,8 @@ from .bot_finance import K_FIN, K_MONEY, FinUI, days_word, register_finance
 from .bot_planner import K_BANK, PlanUI, register_planner, time_rows
 from .bot_story import register_story, strip_line
 from .bot_weekly import brief_text, recap_text
+from .bot_extras import deadline_pings, register_extras, side_offer_msg, sleep_kb, stars_line
+from .planner import wanted
 from .life import month_bounds
 from .backup import make_backup
 from aiogram.types import FSInputFile
@@ -163,6 +165,9 @@ class UI:
         planning = day > t
         lines = [header or self.day_title(day)]
         if day == t:
+            w = stars_line(wanted(self.game.planner, t))
+            if w:
+                lines.append(w)
             sl = strip_line(self.game)
             if sl:
                 lines.append(sl)
@@ -447,6 +452,8 @@ def build_router(cfg: Config, game: Game, auth: Auth) -> Router:
             [Btn(text="💌 Обещания", callback_data="p:list"), Btn(text="🔁 Привычки", callback_data="hb:list")],
             [Btn(text="🛒 Магазин", callback_data="shop:list"), Btn(text="⭐ Оценить день", callback_data="rt:ask:0")],
             [Btn(text="🎬 Сюжет", callback_data="st:home"), Btn(text="📚 Расписание", callback_data="sch:home")],
+            [Btn(text="🎲 Побочки", callback_data="sd:home"), Btn(text="📊 Статистика", callback_data="fs:show")],
+            [Btn(text="🌙 Иду спать", callback_data="sl:go")],
             [Btn(text="🌐 Приложение", callback_data="adm:web"), Btn(text="⚙ Что показывать", callback_data="more:show")],
         )
 
@@ -1147,6 +1154,7 @@ def build_router(cfg: Config, game: Game, auth: Auth) -> Router:
     register_finance(router, ui, edit, celebrate, MAIN_KB)
     register_planner(router, ui, edit, celebrate)
     register_story(router, ui, edit, celebrate)
+    register_extras(router, ui, edit, celebrate)
 
     # Любой другой текст вне диалогов — подсказка
     @router.message(StateFilter(None), F.text)
@@ -1279,6 +1287,24 @@ async def reminders_loop(bot: Bot, cfg: Config, game: Game) -> None:
                     game.set_setting("sent_recap", f"{prev[0]}-{prev[1]}")
                     await bot.send_message(cfg.owner_id, recap_text(game.weekly.recap(ui.today(), last=True)))
                 await bot.send_message(cfg.owner_id, brief_text(game.weekly.brief(ui.today())))
+            # ⏰ дедлайны банка — за неделю и за 5 дней (раз в день, после 10:00)
+            if now.hour >= 10 and game.get_setting("sent_dl") != today_str:
+                game.set_setting("sent_dl", today_str)
+                pings = deadline_pings(game, ui.today())
+                if pings:
+                    await bot.send_message(cfg.owner_id, "\n".join(pings) + "\n\n<i>Можно уже сейчас положить в план кусочек — 🗃 Банк</i>")
+            # 🌙 за 30 минут до отбоя — кнопка «Иду спать» (если ещё не нажимал)
+            bt = game.get_setting("bedtime", "00:00")
+            bh, bm = map(int, bt.split(":"))
+            nudge = (datetime(2000, 1, 1, bh, bm) - timedelta(minutes=30)).strftime("%H:%M")
+            if hm == nudge and game.get_setting("sent_sleep") != today_str and not game.sleep.get(ui.today()):
+                game.set_setting("sent_sleep", today_str)
+                await bot.send_message(cfg.owner_id, f"🌙 Через 30 минут отбой ({bt}). Когда ляжешь — нажми, это точка в конце дня.",
+                                       reply_markup=sleep_kb())
+            # 🎲 побочка дня — пару раз в неделю, в случайный момент 12:00–19:00
+            o = game.side.maybe_offer(ui.today(), now)
+            if o:
+                await bot.send_message(cfg.owner_id, *side_offer_msg(o))
             # 🚇 пора выходить — один раз в день
             if game.get_setting("sched_leave", "1") == "1" and game.get_setting("sent_leave") != today_str:
                 la = game.schedule.leave_at(now.date())
@@ -1328,6 +1354,9 @@ COMMANDS = [
     BotCommand(command="schedule", description="Расписание пар"),
     BotCommand(command="story", description="Сюжетные миссии"),
     BotCommand(command="week", description="Брифинг и итоги недели"),
+    BotCommand(command="sleep", description="Иду спать"),
+    BotCommand(command="side", description="Побочки"),
+    BotCommand(command="stats", description="Статистика как в GTA"),
     BotCommand(command="bank", description="Банк заданий"),
     BotCommand(command="web", description="Войти в веб-приложение"),
     BotCommand(command="help", description="Помощь"),

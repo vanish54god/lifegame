@@ -212,8 +212,83 @@ function weekCutscene(r) {
   if (r.limit_total) parts.push(`💰 в лимите ${r.limit_days} из ${r.limit_total} дн`);
   if (r.skills.length) parts.push("💪 " + r.skills.map(k => `${k.emoji} ${k.title} +${fmt(k.week_xp)}`).join(" · "));
   r.missions.forEach(m => parts.push(`${m.emoji} ${m.title}`));
+  if (r.sleep && r.sleep.week_logged) parts.push(`🌙 отбой вовремя ${r.sleep.week_ontime}/${r.sleep.week_logged}, в среднем в ${r.sleep.avg}`);
+  if (r.side_done) parts.push(`🎲 побочек: ${r.side_done}`);
   return cutscene({
     label: "Неделя пройдена", chapter: `Неделя ${r.week} · ${r.span}`, title: r.verdict + (r.delta != null ? ` (${r.delta > 0 ? "+" : ""}${r.delta}%)` : ""),
     outroRaw: parts.join("\n"), reward: `+${fmt(r.xp)} XP за неделю${r.rating_avg ? `  ·  ⭐ ${r.rating_avg}` : ""}`,
   });
 }
+
+// ---------- ⭐ розыск в банке ----------
+function wantedHtml() {
+  const w = state.stats && state.stats.wanted;
+  if (!w || !w.stars) return "";
+  return `<div class="banner bad"><b>🚨 Розыск ${"★".repeat(w.stars)}</b> — просроченные дедлайны. Закроешь — звёзды погаснут.
+    ${w.items.slice(0, 5).map(i => `<div class="small">• ${esc(i.title)} — просрочено на ${i.late} ${plural(i.late, "день", "дня", "дней")}</div>`).join("")}</div>`;
+}
+
+// ---------- 🌙 иду спать ----------
+async function sleepHtml(isToday) {
+  if (!isToday) return "";
+  const h = new Date().getHours();
+  if (h >= 5 && h < 20) return "";
+  const s = await api("GET", "/sleep").catch(() => null);
+  if (!s) return "";
+  if (s.logged_today) return `<div class="card sleep-card done small">🌙 Отбой записан · серия ${s.streak} · за неделю вовремя ${s.week_ontime}/${s.week_logged}${s.avg ? `, в среднем в ${s.avg}` : ""}</div>`;
+  return `<button class="card sleep-card" data-act="sleepGo"><span style="font-size:26px">🌙</span>
+    <span class="q-body"><b>Иду спать</b><span class="small muted" style="display:block">отбой в ${s.bedtime}${s.streak ? ` · серия ${s.streak}` : ""} — точка в конце дня</span></span></button>`;
+}
+actions.sleepGo = async () => {
+  const r = await api("POST", "/sleep");
+  toast(r.ontime ? `🌙 Отбой в ${r.at} — вовремя! +${r.xp} XP · серия ${r.streak}` : `🌙 Записал: ${r.at}. Отбой был в ${r.bedtime} — завтра получится`);
+  celebrate(r);
+  await refresh();
+  const rate = document.querySelector("[data-act=rate]");
+  if (rate) rate.scrollIntoView({ behavior: "smooth", block: "center" });
+};
+
+// ---------- 🎲 побочки ----------
+function sideOfferHtml(sd) {
+  const o = sd && sd.today;
+  if (!o || o.status !== "offered") return "";
+  return `<div class="card side-card"><div class="story-label">🎲 Побочка дня</div>
+    <div class="story-title" style="margin:2px 0 4px">${esc(o.item.title)}</div>
+    <div class="small muted">+${o.item.xp} XP, если сегодня. Без штрафа, если нет.</div>
+    <div class="row" style="gap:8px;margin-top:10px"><button class="btn btn-accent" style="flex:1" data-act="sideAns" data-id="${o.id}" data-t="1">✅ Беру</button>
+      <button class="btn" data-act="sideAns" data-id="${o.id}" data-t="0">⏭ Не сегодня</button></div></div>`;
+}
+actions.sideAns = async el => {
+  await api("POST", `/side/offers/${el.dataset.id}`, { take: el.dataset.t === "1" });
+  toast(el.dataset.t === "1" ? "🎲 В бонусных квестах на сегодня" : "Ок, в другой раз");
+  await refresh();
+};
+async function renderSide() {
+  const sd = await api("GET", "/side");
+  let html = adminTabs() + `<p class="muted small" style="margin:4px 0 10px">Маленькие приятные дела, которые всё время откладываешь. Пару раз в неделю, в случайный момент между 12 и 19, бот предложит одно — взять или пропустить.</p>`;
+  html += sideOfferHtml(sd);
+  html += sd.pool.length ? `<div class="card">${sd.pool.map(it => `<div class="step"><span class="step-title">🎲 ${esc(it.title)}</span>
+      <span class="muted small">${it.xp} XP${it.done ? ` · ×${it.done}` : ""}</span>
+      <button class="btn btn-sm btn-ghost" data-act="sideDel" data-id="${it.id}" aria-label="Убрать">✕</button></div>`).join("")}</div>`
+    : `<div class="empty small">Пул пуст. Позвонить бабушке, разобрать фото, прогулка без телефона…</div>`;
+  html += `<form class="card row" data-submit="sideAdd" style="margin-top:10px;gap:8px">
+      <input class="input" name="title" maxlength="120" placeholder="Новая побочка" required style="flex:2">
+      <input class="input" name="xp" type="number" min="10" max="300" value="50" style="flex:0 0 80px">
+      <button class="btn" type="submit">＋</button></form>
+    ${sd.pool.length && !(sd.today) ? `<button class="btn wide" data-act="sideNow" style="margin-top:8px">🎲 Дай побочку сейчас</button>` : ""}`;
+  view.innerHTML = html;
+}
+actions.sideAdd = async form => { await api("POST", "/side", { title: form.title.value, xp: Number(form.xp.value) || 50 }); await renderSide(); };
+actions.sideDel = async el => { await api("DELETE", "/side/" + el.dataset.id); await renderSide(); };
+actions.sideNow = async () => { await api("POST", "/side/offer"); await renderSide(); };
+
+// ---------- 📊 статистика как в GTA ----------
+STATS.fun = async () => {
+  const groups = await api("GET", "/funstats");
+  let shots = 0;
+  try { shots = Number(localStorage.getItem("lg-shoot") || 0); } catch (e) { /* ничего */ }
+  groups[1].items.push({ label: "Падающих звёзд пролетело при тебе", value: shots, sub: "на этом устройстве" });
+  view.innerHTML = `<div class="h1">Статистика</div>` + statsTabs() + groups.map(g => `<div class="h2">${g.title}</div>
+    <div class="card fun">${g.items.map(i => `<div class="fun-row"><span>${esc(i.label)}</span><span class="fun-dots"></span>
+      <b>${typeof i.value === "number" ? fmt(i.value) : esc(String(i.value))}</b></div>${i.sub ? `<div class="fun-sub">${esc(String(i.sub))}</div>` : ""}`).join("")}</div>`).join("");
+};

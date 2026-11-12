@@ -28,6 +28,8 @@ from .schedule import SchedError
 from .study import StudyError
 from .story import StoryError
 from .web_story import add_story_routes
+from .web_extras import add_extra_routes
+from .sidequests import SideError
 from .web_schedule import add_schedule_routes
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
@@ -122,6 +124,7 @@ def create_app(cfg: Config, game: Game, auth: Auth) -> FastAPI:
     @app.exception_handler(SchedError)
     @app.exception_handler(StudyError)
     @app.exception_handler(StoryError)
+    @app.exception_handler(SideError)
     @app.exception_handler(EnvError)
     async def fin_error(_: Request, e: Exception):
         return JSONResponse({"detail": str(e)}, status_code=400)
@@ -197,7 +200,8 @@ def create_app(cfg: Config, game: Game, auth: Auth) -> FastAPI:
 
     @app.get("/api/stats", dependencies=[Depends(require_auth)])
     async def stats():
-        return game.full_stats(today())
+        from .planner import wanted
+        return {**game.full_stats(today()), "wanted": wanted(game.planner, today())}
 
     # ================= Квесты =================
 
@@ -353,6 +357,7 @@ def create_app(cfg: Config, game: Game, auth: Auth) -> FastAPI:
     add_planner_routes(app, game, today, lambda: datetime.now(cfg.tz), require_auth)
     add_schedule_routes(app, game, today, lambda: datetime.now(cfg.tz), require_auth)
     add_story_routes(app, game, today, require_auth)
+    add_extra_routes(app, game, today, lambda: datetime.now(cfg.tz), require_auth)
 
     # ================= Само приложение =================
 

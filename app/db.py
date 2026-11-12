@@ -164,5 +164,9 @@ def connect(path: str | Path) -> sqlite3.Connection:
     conn.executescript(STUDY_SCHEMA)
     from .story import SCHEMA as STORY_SCHEMA    # сюжетные миссии и главы
     conn.executescript(STORY_SCHEMA)
+    from .sleep import SCHEMA as SLEEP_SCHEMA    # «иду спать»
+    conn.executescript(SLEEP_SCHEMA)
+    from .sidequests import SCHEMA as SIDE_SCHEMA  # побочки
+    conn.executescript(SIDE_SCHEMA)
     _migrate(conn)
     return conn

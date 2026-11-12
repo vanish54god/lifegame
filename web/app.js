@@ -154,6 +154,11 @@ async function loadHud() {
   $("#hud-xp-text").textContent = `${fmt(lv.into)} / ${fmt(lv.need)} XP`;
   $("#hud-coins").textContent = "₵" + fmt(s.coins);
   $("#hud-streak").textContent = "🔥 " + s.streak;
+  const w = s.wanted || { stars: 0 };
+  const hw = $("#hud-wanted");
+  hw.hidden = !w.stars;
+  hw.innerHTML = "★".repeat(w.stars) + `<span>${"★".repeat(5 - w.stars)}</span>`;
+  hw.title = `Розыск: ${w.items.length} просроченных дедлайнов`;
   return s;
 }
 
@@ -172,6 +177,8 @@ async function go(tab, { animate = true } = {}) {
   } catch (e) { if (!(e instanceof ApiError && e.message === "Нужно войти")) toastErr(e); }
 }
 const refresh = () => go(state.tab, { animate: false });
+
+$("#hud-wanted").addEventListener("click", () => { state.adminTab = "bank"; state.bankWanted = true; go("admin"); });
 
 document.querySelector(".tabbar").addEventListener("click", e => {
   const b = e.target.closest("button[data-tab]");
@@ -260,8 +267,9 @@ async function renderToday() {
     isToday ? api("GET", "/promises") : null, isToday ? api("GET", "/plan/day/" + day) : null,
     isToday ? api("GET", "/habits") : null, api("GET", "/rating/" + day),
     isToday ? api("GET", "/fin/envelopes").catch(() => null) : null]);
-  const [sched, marks, story] = isToday ? await Promise.all([api("GET", "/schedule/now").catch(() => null),
-    api("GET", "/schedule/marks").catch(() => null), api("GET", "/story").catch(() => null)]) : [null, null, null];
+  const [sched, marks, story, side, sleepCard] = isToday ? await Promise.all([api("GET", "/schedule/now").catch(() => null),
+    api("GET", "/schedule/marks").catch(() => null), api("GET", "/story").catch(() => null),
+    api("GET", "/side").catch(() => null), sleepHtml(true)]) : [null, null, null, null, ""];
   state.meta.today = d.today;
   const qs = d.quests.filter(q => q.category !== "habit" && q.category !== "money");
   const canPlay = day <= d.today;
@@ -280,7 +288,7 @@ async function renderToday() {
       </div>
     </div>`;
   if (isToday) html += await weekCardsHtml(d.today);
-  html += storyStripHtml(story) + schedTodayHtml(sched) + studyHtml(marks);
+  html += sleepCard + storyStripHtml(story) + sideOfferHtml(side) + schedTodayHtml(sched) + studyHtml(marks);
   if (plan) html += startByHtml(plan.start_by);
   if (money && money.on) {
     const left = money.left_today;
@@ -402,6 +410,7 @@ async function renderAdmin() {
   if (!state.adminDay || state.adminDay < t) state.adminDay = addDays(t, 1);
   if (state.adminTab === "bank") { await loadHud(); return renderBank(); }
   if (state.adminTab === "story") { await loadHud(); return renderStory(); }
+  if (state.adminTab === "side") { await loadHud(); return renderSide(); }
   const day = state.adminDay;
   const [d, tpls, pl, sch] = await Promise.all([api("GET", "/day/" + day), api("GET", "/templates"), api("GET", "/plan/day/" + day),
     api("GET", "/schedule/day/" + day).catch(() => null), loadHud()]);

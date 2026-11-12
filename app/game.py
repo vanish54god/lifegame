@@ -138,6 +138,10 @@ ACHIEVEMENTS = [
     ("fund_ontime", "🎁", "Всё по плану", "Фонд набрался к своему сроку", False),
     ("story1", "🎬", "Миссия пройдена", "Прошёл первую сюжетную миссию", False),
     ("skill5", "💪", "Прокачка", "Любой навык 5 уровня", False),
+    ("sleep7", "🌙", "Режим", "7 ночей подряд ложился вовремя", False),
+    ("side1", "🎲", "Случайная встреча", "Выполнил первую побочку", False),
+    ("side10", "🗺", "Авантюрист", "10 выполненных побочек", False),
+    ("escape", "🚔", "Ушёл от погони", "Был розыск ★★★ — и закрыл все просрочки", False),
     ("allround", "🧩", "Универсал", "Четыре навыка 5 уровня и выше", False),
     ("skill20", "👑", "Мастер своего дела", "Любой навык 20 уровня", False),
     ("chapter1", "📖", "Конец главы", "Закрыл главу, в которой были пройденные миссии", False),
@@ -176,6 +180,7 @@ ACHIEVEMENTS = [
     ("longhaul", "🦥", "Долгострой", "Закрыл задачу, которая пролежала в банке 30+ дней", True),
     ("deep", "🧘", "Глубокое погружение", "3 часа на таймере за один квест", True),
     ("exhale", "😮‍💨", "Выдох", "Прошёл сюжетную миссию из трёх и больше этапов", True),
+    ("owl", "🦉", "Сова", "Нажал «Иду спать» после трёх ночи", True),
     ("double", "🛡", "С запасом", "На каждый повторяющийся платёж отложено на два раза вперёд", True),
 ]
 
@@ -201,6 +206,12 @@ class Game:
         self.skills = Skills(self)
         from .weekly import Weekly
         self.weekly = Weekly(self)
+        from .sleep import Sleep
+        self.sleep = Sleep(self)
+        from .sidequests import SideQuests
+        self.side = SideQuests(self)
+        from .funstats import FunStats
+        self.funstats = FunStats(self)
         # для умных чек-инов (в памяти; после перезапуска считаем, что ты только что был активен)
         self.last_activity = time.time()
         self.last_checkin = 0.0
@@ -679,6 +690,9 @@ class Game:
         sc = self.study.counts()
         stc = self.story.counts()
         skc = self.skills.counts(today)
+        slc = self.sleep.counts(today)
+        sdc = self.side.counts()
+        escaped = self._wanted_escape(today)
         bc = self.planner.counts()
         pc = self.planner.pace_counts()
         hd, hw = self.life.best_habit_streaks(today)
@@ -749,6 +763,8 @@ class Game:
             "inlimit7": max(self.fin.limit_streak(today), self.env.limit_streak(today)) >= 7,
             "dream": fc["wishes_done"] >= 1,
             "envelope1": ec["allocations"] >= 1, "saver10k": ec["saved_total"] >= 1_000_000,
+            "sleep7": slc["sleep_best"] >= 7, "owl": slc["owl"] >= 1,
+            "side1": sdc["side_done"] >= 1, "side10": sdc["side_done"] >= 10, "escape": escaped,
             "skill5": skc["skill_max"] >= 5, "allround": skc["skills_5"] >= 4, "skill20": skc["skill_max"] >= 20,
             "story1": stc["story_done"] >= 1, "chapter1": stc["chapters_closed"] >= 1,
             "exhale": stc["story_big"] >= 1,
@@ -803,6 +819,19 @@ class Game:
         self.checkin_unanswered += 1
 
     # ================= Настройки =================
+
+    def _wanted_escape(self, today: date) -> bool:
+        """Для ачивки «Ушёл от погони»: был розыск ★★★+, а потом стало 0 звёзд."""
+        from .planner import wanted
+        if self.get_setting("wanted_escaped") == "1":
+            return True
+        stars = wanted(self.planner, today)["stars"]
+        if stars >= 3:
+            self.set_setting("wanted_peak", "1")
+        elif stars == 0 and self.get_setting("wanted_peak") == "1":
+            self.set_setting("wanted_escaped", "1")
+            return True
+        return False
 
     def get_setting(self, key: str, default: str | None = None) -> str | None:
         row = self.conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()

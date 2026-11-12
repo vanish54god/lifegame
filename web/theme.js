@@ -76,6 +76,7 @@
       var sh = document.createElement("div"); sh.className = "shooting";
       sh.style.left = (40 + Math.random() * 55) + "%"; sh.style.top = (5 + Math.random() * 30) + "%";
       el.appendChild(sh); setTimeout(function () { sh.remove(); }, 1300);
+      try { localStorage.setItem("lg-shoot", String(Number(localStorage.getItem("lg-shoot") || 0) + 1)); } catch (e) { /* ничего */ }
     }, 20000);
   }
   apply();

@@ -65,6 +65,11 @@ def recap_text(r: dict) -> str:
         L.append(f"{m['emoji']} Миссия пройдена: <b>{escape(m['title'])}</b>")
     if r["skills"]:
         L.append("💪 " + " · ".join(f"{k['emoji']} {k['title']} +{k['week_xp']}" for k in r["skills"]))
+    sl = r.get("sleep") or {}
+    if sl.get("week_logged"):
+        L.append(f"🌙 Отбой вовремя: {sl['week_ontime']}/{sl['week_logged']} · в среднем в {sl['avg']}")
+    if r.get("side_done"):
+        L.append(f"🎲 Побочек: {r['side_done']}")
     if r["rating_avg"]:
         L.append(f"⭐ Средняя оценка дня: {r['rating_avg']}")
     L.append(bar)

@@ -361,3 +361,19 @@ class Planner:
                           "AND julianday(done_day) - julianday(created_day) >= 30"),
             "deep": q("SELECT COUNT(*) FROM quests WHERE timer_sec >= 3 * 3600"),
         }
+
+
+# ================= ⭐ Уровень розыска =================
+
+def wanted(planner, today: date) -> dict:
+    """Звёзды розыска — только за просроченные дедлайны банка: за каждую задачу ★, +★ после 3 дней, +★ после недели."""
+    items, stars = [], 0
+    for t in planner.tasks(today):
+        for x in [c for c in t["children"] if c["status"] == "open"] or [t]:
+            if x["deadline"] and x["deadline"] < today.isoformat():
+                late = (today - date.fromisoformat(x["deadline"])).days
+                w = 1 + (late >= 3) + (late >= 7)
+                stars += w
+                items.append({"id": x["id"], "title": x["title"], "deadline": x["deadline"], "late": late, "stars": w})
+    items.sort(key=lambda i: -i["late"])
+    return {"stars": min(5, stars), "items": items}
