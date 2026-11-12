@@ -29,6 +29,7 @@ def done(g, day, cat, title, xp):
 
 def test_skill_mapping_and_levels():
     assert skill_of("habit", "🔁 Спорт") == "body" and skill_of("habit", "Вода 2 л") == "will"
+    assert skill_of("habit", "🏃 Физра") == "body" and skill_of("habit", "Физкультура") == "body"
     assert skill_of("study", "x") == "mind" and skill_of("bonus", "x") is None
     assert level_of(0, 120) == (0, 0, 120)
     assert level_of(480, 120)[0] == 2 and level_of(479, 120)[0] == 1
