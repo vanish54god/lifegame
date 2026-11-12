@@ -439,3 +439,15 @@ html[data-theme="vice"] .ob-item.ob-late { background: linear-gradient(90deg, va
 html[data-theme="vice"] .card, html[data-theme="vice"] .tile { box-shadow: 0 1px 2px var(--shadow); }
 /* в установленном на iPhone/iPad приложении часы и батарея белые — подложка под ними в светлой теме */
 html[data-theme="vice"] body::before { content: ""; position: fixed; top: 0; left: 0; right: 0; height: var(--safe-t); background: #3a2636; z-index: 30; }
+
+/* 📚 расписание */
+.sched-card { padding: 12px 14px; margin-bottom: 10px; }
+.pair-now { font-size: 15px; }
+.pair-tag { font: 700 11px var(--cond); letter-spacing: .08em; text-transform: uppercase; padding: 2px 6px; border-radius: 4px; background: var(--accent); color: var(--accent-ink); vertical-align: 2px; }
+.pair-tag.next { background: var(--surface-2); color: var(--ink-2); border: 1px solid var(--line); }
+.pair { display: flex; gap: 10px; padding: 5px 0; font-size: 13px; border-top: 1px solid var(--line); }
+.pair:first-of-type { border-top: 0; }
+.pair-time { font: 700 13px var(--cond); color: var(--ink-2); min-width: 88px; }
+.pair.off .pair-title { text-decoration: line-through; color: var(--muted); }
+.pairs-more { margin-top: 8px; }
+.pairs-more summary { cursor: pointer; list-style: none; }

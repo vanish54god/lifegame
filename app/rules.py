@@ -129,6 +129,7 @@ def suggest_xp(category: "Category", difficulty: int) -> int:
 BOT_SHOW = {
     "show_time": ("⏰ Когда начинать", "1"),
     "show_money": ("💰 Сколько можно потратить", "1"),
+    "show_sched": ("📚 Пары", "1"),
     "show_habits": ("🔁 Привычки списком", "0"),
     "show_promises": ("💌 Обещания списком", "0"),
     "show_rating": ("⭐ Оценка дня (иначе — после 20:00)", "0"),

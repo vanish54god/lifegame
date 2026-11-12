@@ -334,11 +334,14 @@ class Planner:
     def load(self, day: date) -> dict:
         qs = [q for q in self.g.quests(day) if q.category.pickable]
         planned = sum(q.est_min or 0 for q in qs)
-        cap = int(float(self.g.get_setting("capacity_h", "6")) * 60)
+        # учёт сил: в день с парами (пары + окна + дорога) сил на дела меньше — своя настройка
+        busy = self.g.schedule.busy(day)
+        base = int(float(self.g.get_setting("capacity_h", "6")) * 60)
+        cap = int(float(self.g.get_setting("capacity_pair_h", "3")) * 60) if busy["pairs"] else base
         factor, _ = self.pace_factor()
         return {"planned_min": planned, "real_min": round(planned * factor), "factor": factor,
-                "unknown": sum(1 for q in qs if not q.est_min), "capacity_min": cap,
-                "over": planned * factor > cap}
+                "unknown": sum(1 for q in qs if not q.est_min), "capacity_min": cap, "capacity_base": base,
+                "busy": busy, "over": planned * factor > cap}
 
     # ================= Для достижений =================
 

@@ -192,6 +192,10 @@ class PlanUI:
         txt = f"Нагрузка: <b>{rules.fmt_min(ld['real_min']) if ld['real_min'] else '0ч'}</b> из {rules.fmt_min(ld['capacity_min'])}"
         if ld["unknown"]:
             txt += f" (+{ld['unknown']} без оценки)"
+        b = ld.get("busy") or {}
+        if b.get("pairs"):
+            txt += (f"\n📚 День с парами: {b['first']}–{b['last']} + дорога {rules.fmt_min(b['commute_min'])} — "
+                    f"сил на квесты меньше")
         if ld["over"]:
             txt += "\n⚠️ <b>Перегруз.</b> Такой день не переживёт первую внеплановую задачу — убери что-нибудь."
         return txt

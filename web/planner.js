@@ -52,6 +52,7 @@ function loadHtml(ld) {
     <div class="row small"><span>Нагрузка: <b>${fmtMin(real)}</b> из ${fmtMin(cap)}${ld.unknown ? ` <span class="muted">(+${ld.unknown} без оценки)</span>` : ""}</span>
       ${ld.factor !== 1 ? `<span class="spacer"></span><span class="muted">темп ×${ld.factor}</span>` : ""}</div>
     <div class="dayprog-bar"><div class="dayprog-fill" style="width:${Math.min(100, (100 * real) / cap)}%;background:${ld.over ? "var(--bad)" : "var(--ink-2)"}"></div></div>
+    ${ld.busy && ld.busy.pairs ? `<div class="small muted" style="margin-top:4px">📚 День с парами ${ld.busy.first}–${ld.busy.last} + дорога ${fmtMin(ld.busy.commute_min)} — на квесты ${fmtMin(cap)}</div>` : ""}
     ${ld.over ? `<div class="small" style="color:var(--bad);margin-top:4px">⚠️ Перегруз — такой день не переживёт первую внеплановую задачу. Убери что-нибудь.</div>` : ""}</div>`;
 }
 
@@ -375,4 +376,78 @@ actions.habitDel = async el => {
   if (!confirm("Убрать привычку? История останется в статистике.")) return;
   await api("DELETE", "/habits/" + el.dataset.id);
   await refresh();
+};
+
+// ---------- 📚 Расписание пар ----------
+function pairRow(p) {
+  const off = p.status === "cancelled";
+  return `<div class="pair ${off ? "off" : ""}"><span class="pair-time">${p.allday ? "весь день" : `${p.start}–${p.end}`}</span>
+    <span class="pair-title">${off ? "🎉 " : ""}${esc(p.title)}${p.location ? ` <span class="muted">· ${esc(p.location)}</span>` : ""}</span></div>`;
+}
+function schedTodayHtml(s) {
+  if (!s || !s.connected) return "";
+  const pairs = s.pairs.filter(p => !p.allday);
+  const allday = s.pairs.filter(p => p.allday && p.status === "ok").map(p => `<div class="small muted">🗓 ${esc(p.title)}</div>`).join("");
+  let head;
+  if (s.now) {
+    head = `<div class="pair-now"><span class="pair-tag">Сейчас</span> <b>${esc(s.now.title)}</b>${s.now.location ? ` · ${esc(s.now.location)}` : ""}
+      <div class="small muted">до ${s.now.end} · ещё ${fmtMin(s.now_left_min)}</div></div>`;
+  } else if (s.next && s.next.day === s.day) {
+    head = `<div class="pair-now"><span class="pair-tag next">Дальше</span> <b>${esc(s.next.title)}</b> в ${s.next.start}${s.next.location ? ` · ${esc(s.next.location)}` : ""}
+      <div class="small muted">через ${fmtMin(s.next_in_min)}${s.leave_at && s.next_in_min > 60 ? ` · выходить в ${s.leave_at}` : ""}</div></div>`;
+  } else if (pairs.length) {
+    head = `<div class="small muted">📚 Пары на сегодня закончились ✌️</div>`;
+  } else {
+    head = `<div class="small muted">📚 Сегодня пар нет${s.next ? ` · ближайшая ${WD_SHORT[parseDay(s.next.day).getDay()]} ${s.next.start} — ${esc(s.next.title)}` : ""}</div>`;
+  }
+  const after = s.now && s.next && s.next.day === s.day ? `<div class="small" style="margin-top:6px">⏭ Дальше: ${esc(s.next.title)} в ${s.next.start}${s.next.location ? ` · ${esc(s.next.location)}` : ""}</div>` : "";
+  const list = pairs.length ? `<details class="pairs-more"><summary class="small muted">Все пары сегодня · ${pairs.filter(p => p.status === "ok").length}</summary>${pairs.map(pairRow).join("")}</details>` : "";
+  return `<div class="card sched-card">${allday}${head}${after}${list}</div>`;
+}
+function schedDayHtml(s) {
+  if (!s || !s.pairs.length) return "";
+  const pairs = s.pairs.filter(p => !p.allday);
+  const b = s.busy;
+  return `<div class="card sched-card">
+    <div class="row small"><b>📚 ${pairs.length ? `Пары ${b.first}–${b.last}` : "Пар нет"}</b><span class="spacer"></span>
+      ${s.leave_at ? `<span class="muted">🚇 выходить в ${s.leave_at}</span>` : ""}</div>
+    ${s.pairs.map(pairRow).join("")}</div>`;
+}
+function schedSettingsHtml(st, cap) {
+  return `<div class="h2">📚 Расписание пар</div>
+    <form class="card" data-submit="schedSave">
+      ${st.connected ? `<div class="small">✅ Подключено: <span class="muted">${esc(st.url_masked)}</span> · пар впереди: <b>${st.count}</b></div>
+        <div class="small muted">Обновлено: ${st.last_sync ? st.last_sync.slice(0, 16).replace("T", " ") : "ещё нет"} · бот сам обновляет раз в 3 часа</div>
+        ${st.last_error ? `<div class="small" style="color:var(--bad)">⚠️ ${esc(st.last_error)}</div>` : ""}`
+      : `<p class="muted small" style="margin-top:0">В Apple Календаре: «Календари» → ⓘ у «Пары» → «Общий календарь» → скопируй ссылку сюда.</p>`}
+      <label class="field" style="margin-top:8px"><span>${st.connected ? "Новая ссылка (пусто — оставить как есть)" : "Ссылка на календарь"}</span>
+        <input class="input" name="url" placeholder="webcal://p…-caldav.icloud.com/published/2/…" autocomplete="off"></label>
+      <div class="row">
+        <label class="field" style="flex:1"><span>Дорога в день с парами, мин (туда и обратно)</span><input class="input" type="number" name="commute" min="0" max="600" value="${st.commute_min}"></label>
+        <label class="field" style="flex:1"><span>Часов на квесты в день с парами</span><input class="input" type="number" name="cap_pair" min="0" max="16" step="0.5" value="${cap}"></label></div>
+      <label class="row small" style="margin-bottom:12px"><input type="checkbox" name="leave" ${st.leave ? "checked" : ""}> 🚇 напоминать в боте, когда пора выходить</label>
+      <div class="row" style="gap:8px"><button class="btn btn-accent" style="flex:1" type="submit">Сохранить</button>
+        ${st.connected ? `<button class="btn" type="button" data-act="schedSync">🔄 Обновить</button>
+        <button class="btn btn-ghost" type="button" data-act="schedOff" aria-label="Отключить">✕</button>` : ""}</div>
+    </form>`;
+}
+actions.schedSave = async form => {
+  const f = form.elements;
+  const body = { commute_min: Number(f.commute.value) || 0, leave: f.leave.checked };
+  if (f.url.value.trim()) body.url = f.url.value.trim();
+  const r = await api("PUT", "/schedule/settings", body);
+  const cur = await api("GET", "/settings");
+  await api("PUT", "/settings", { ...cur, capacity_pair_h: Number(f.cap_pair.value) || 0, show: undefined, show_titles: undefined, sessions: undefined, day_start_hour: undefined });
+  toast(r.last_error ? `⚠️ ${r.last_error}` : body.url ? `📚 Подключено · пар: ${r.count}` : "Сохранено");
+  await render();
+};
+actions.schedSync = async () => {
+  const r = await api("POST", "/schedule/sync");
+  toast(`🔄 Обновлено · пар впереди: ${r.count}${r.cancelled ? ` · отменили ${r.cancelled}` : ""}`);
+  await render();
+};
+actions.schedOff = async () => {
+  if (!confirm("Отключить расписание? Пары пропадут из игры (в Apple Календаре всё останется).")) return;
+  await api("PUT", "/schedule/settings", { url: "" });
+  await render();
 };

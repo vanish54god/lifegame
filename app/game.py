@@ -182,6 +182,8 @@ class Game:
         from .envelopes import Envelopes
         self.env = Envelopes(self)
         self.life = Life(self)
+        from .schedule import Schedule
+        self.schedule = Schedule(self)
         # для умных чек-инов (в памяти; после перезапуска считаем, что ты только что был активен)
         self.last_activity = time.time()
         self.last_checkin = 0.0

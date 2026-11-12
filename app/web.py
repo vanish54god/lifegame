@@ -24,6 +24,8 @@ from .web_planner import add_planner_routes
 from .planner import PlanError
 from .life import LifeError
 from .envelopes import EnvError
+from .schedule import SchedError
+from .web_schedule import add_schedule_routes
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
@@ -82,6 +84,7 @@ class SettingsIn(BaseModel):
     checkin_to: int = Field(22, ge=1, le=24)
     bedtime: str = "00:00"
     capacity_h: float = Field(6, ge=1, le=16)
+    capacity_pair_h: float = Field(3, ge=0, le=16)
     remind_startby: bool = True
 
 class PromiseIn(BaseModel):
@@ -113,6 +116,7 @@ def create_app(cfg: Config, game: Game, auth: Auth) -> FastAPI:
     @app.exception_handler(FinError)
     @app.exception_handler(PlanError)
     @app.exception_handler(LifeError)
+    @app.exception_handler(SchedError)
     @app.exception_handler(EnvError)
     async def fin_error(_: Request, e: Exception):
         return JSONResponse({"detail": str(e)}, status_code=400)
@@ -312,6 +316,7 @@ def create_app(cfg: Config, game: Game, auth: Auth) -> FastAPI:
                 "checkin_to": int(game.get_setting("checkin_to", "22")),
                 "bedtime": game.get_setting("bedtime", "00:00"),
                 "capacity_h": float(game.get_setting("capacity_h", "6")),
+                "capacity_pair_h": float(game.get_setting("capacity_pair_h", "3")),
                 "remind_startby": game.get_setting("remind_startby", "1") == "1",
                 "show": {k: game.get_setting(k, d) == "1" for k, (_, d) in BOT_SHOW.items()},
                 "show_titles": {k: t for k, (t, _) in BOT_SHOW.items()},
@@ -335,11 +340,13 @@ def create_app(cfg: Config, game: Game, auth: Auth) -> FastAPI:
             raise HTTPException(400, "Отбой — в формате ЧЧ:ММ")
         game.set_setting("bedtime", body.bedtime)
         game.set_setting("capacity_h", str(body.capacity_h))
+        game.set_setting("capacity_pair_h", str(body.capacity_pair_h))
         game.set_setting("remind_startby", "1" if body.remind_startby else "0")
         return await get_settings()
 
     add_finance_routes(app, game, today, require_auth)
     add_planner_routes(app, game, today, lambda: datetime.now(cfg.tz), require_auth)
+    add_schedule_routes(app, game, today, lambda: datetime.now(cfg.tz), require_auth)
 
     # ================= Само приложение =================
 

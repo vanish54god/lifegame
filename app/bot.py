@@ -119,12 +119,46 @@ class UI:
     def show(self, key: str) -> bool:
         return self.game.get_setting(key, SHOW[key][1]) == "1"
 
+    def sched_lines(self, day: date) -> list[str]:
+        """📚 Пары: сегодня — «сейчас / дальше», в другие дни — коротко весь день."""
+        sch = self.game.schedule
+        if not sch.url:
+            return []
+        out = [f"🗓 {escape(e['title'])}" for e in sch.day(day) if e["allday"] and e["status"] == "ok"]
+        ps = sch.day(day)
+        pairs = [p for p in ps if not p["allday"]]
+        if not pairs:
+            return out + (["📚 Пар нет"] if day > self.today() else [])
+        now = datetime.now(self.cfg.tz)
+        if day == self.today() and now.date() == day:
+            nn = sch.now_next(now)
+            if nn["now"]:
+                p = nn["now"]
+                out.append(f"📚 <b>Сейчас:</b> {escape(p['title'])}" + (f", {escape(p['location'])}" if p["location"] else "")
+                           + f" · до {p['end']}")
+            nx = nn["next"]
+            if nx and nx["day"] == day.isoformat():
+                out.append(f"⏭ Дальше: {escape(nx['title'])} в {nx['start']}" + (f", {escape(nx['location'])}" if nx["location"] else ""))
+            if not nn["now"] and not (nx and nx["day"] == day.isoformat()):
+                out.append("📚 Пары на сегодня закончились ✌️")
+        else:
+            la = sch.leave_at(day)
+            out.append(f"📚 Пары {pairs[0]['start']}–{pairs[-1]['end']}: "
+                       + ", ".join(escape(short(p["title"], 22)) for p in pairs if p["status"] == "ok")
+                       + (f" · выходить в {la[0]}" if la else ""))
+        for p in pairs:
+            if p["status"] == "cancelled":
+                out.append(f"🎉 Отменили: {escape(p['title'])} {p['start']}")
+        return out
+
     def render_day(self, day: date, header: str | None = None) -> tuple[str, InlineKeyboardMarkup | None]:
         t = self.today()
         pu = PlanUI(self)
         quests = [q for q in self.game.quests(day) if q.category.key not in ("habit", "money")]
         planning = day > t
         lines = [header or self.day_title(day)]
+        if self.show("show_sched") and day >= t:
+            lines += self.sched_lines(day)
         if day == t:
             if self.show("show_time"):
                 sb = pu.start_by_line()
@@ -527,6 +561,51 @@ def build_router(cfg: Config, game: Game, auth: Auth) -> Router:
         except Exception as e:
             return await msg.answer(f"⛔ Бэкап не получился: {escape(str(e))}")
         await msg.answer_document(FSInputFile(path), caption="🔐 Бэкап базы (архив под паролем из .env)")
+
+    def sched_status() -> tuple[str, InlineKeyboardMarkup]:
+        st = game.schedule.settings()
+        if not st["connected"]:
+            return ("📚 <b>Расписание не подключено</b>\n\nВ Apple Календаре: Календари → ⓘ у «Пары» → «Общий календарь» → "
+                    "скопируй ссылку и пришли: <code>/schedule webcal://…</code>\nИли вставь её в приложении: Ещё → Настройки."), None
+        text = (f"📚 <b>Расписание подключено</b> ({escape(st['url_masked'])})\n"
+                f"Пар впереди: <b>{st['count']}</b>\n"
+                f"Обновлено: {st['last_sync'][:16].replace('T', ' ') or 'ещё нет'}\n"
+                f"Дорога в день с парами: {rules.fmt_min(st['commute_min'])}"
+                + (f"\n⚠️ {escape(st['last_error'])}" if st["last_error"] else ""))
+        week = []
+        for i in range(7):
+            d = ui.today() + timedelta(days=i)
+            ps = game.schedule.pairs(d)
+            if ps:
+                week.append(f"{ddmm_wd(d.isoformat())}: {ps[0]['start']}–{ps[-1]['end']} · {len(ps)} пар")
+        if week:
+            text += "\n\n" + "\n".join(week)
+        return text, kb([Btn(text="🔄 Обновить сейчас", callback_data="sch:sync")])
+
+    @router.message(Command("schedule"))
+    async def cmd_schedule(msg: Message, command: CommandObject):
+        if command.args:
+            try:
+                game.schedule.save_settings(url=command.args.strip())
+                r = await game.schedule.sync(ui.today())
+                await msg.answer(f"✅ Подключил! Нашёл {r['count']} пар на ближайшие месяцы.")
+            except Exception as e:
+                return await msg.answer(f"⛔ {escape(str(e))}")
+        text, markup = sched_status()
+        await msg.answer(text, reply_markup=markup)
+
+    @router.callback_query(F.data == "sch:sync")
+    async def sch_sync(cb: CallbackQuery):
+        try:
+            r = await game.schedule.sync(ui.today())
+            await cb.answer(f"✅ Обновлено: {r['count']} пар")
+        except Exception as e:
+            await cb.answer(f"⛔ {e}"[:190], show_alert=True)
+        text, markup = sched_status()
+        try:
+            await cb.message.edit_text(text, reply_markup=markup)
+        except Exception:
+            pass
 
     @router.message(Command("logout_all"))
     async def cmd_logout_all(msg: Message):
@@ -957,6 +1036,20 @@ def build_router(cfg: Config, game: Game, auth: Auth) -> Router:
     return router
 
 
+WD = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
+
+
+def ddmm_wd(day: str) -> str:
+    d = date.fromisoformat(day)
+    return f"{WD[d.weekday()]} {d.day:02d}.{d.month:02d}"
+
+
+def c_min(e: dict) -> int:
+    h1, m1 = map(int, e["start"].split(":"))
+    h2, m2 = map(int, e["end"].split(":"))
+    return max(0, h2 * 60 + m2 - h1 * 60 - m1)
+
+
 async def reminders_loop(bot: Bot, cfg: Config, game: Game) -> None:
     """Раз в 20 секунд проверяет, не пора ли напомнить. Время задаётся в веб-приложении."""
     ui = UI(cfg, game)
@@ -1002,6 +1095,34 @@ async def reminders_loop(bot: Bot, cfg: Config, game: Game) -> None:
                     game.set_setting("sent_startby", today_str)
                     text, markup = ui.render_day(ui.today(), "⏰ <b>Пора садиться за квесты</b>")
                     await bot.send_message(cfg.owner_id, text, reply_markup=markup)
+            # 📚 расписание: синхронизация раз в 3 часа + отмены и переносы
+            if game.schedule.due(now):
+                try:
+                    r = await game.schedule.sync(ui.today())
+                    msg = []
+                    for c in r["cancelled"]:
+                        msg.append(f"🎉 Отменили: {escape(c['title'])} — {ddmm_wd(c['day'])} {c['start']}"
+                                   f" (+{rules.fmt_min(c_min(c))} свободы)")
+                    for m in r["moved"]:
+                        o, n = m["old"], m["new"]
+                        msg.append(f"🔀 Перенесли: {escape(n['title'])} — {ddmm_wd(o['day'])} {o['start']} → "
+                                   f"<b>{ddmm_wd(n['day'])} {n['start']}</b>")
+                    for a in r["added"]:
+                        msg.append(f"➕ Новая пара: {escape(a['title'])} — {ddmm_wd(a['day'])} {a['start']}")
+                    if msg:
+                        await bot.send_message(cfg.owner_id, "📚 <b>Расписание поменялось</b>\n\n" + "\n".join(msg))
+                except Exception as e:
+                    print("Расписание:", e)
+            # 🚇 пора выходить — один раз в день
+            if game.get_setting("sched_leave", "1") == "1" and game.get_setting("sent_leave") != today_str:
+                la = game.schedule.leave_at(now.date())
+                if la and la[0] <= hm < la[1]["start"]:
+                    game.set_setting("sent_leave", today_str)
+                    p = la[1]
+                    n = len(game.schedule.pairs(now.date()))
+                    await bot.send_message(cfg.owner_id, f"🚇 <b>Пора выходить!</b>\nПервая: {escape(p['title'])} в {p['start']}"
+                                           + (f", {escape(p['location'])}" if p["location"] else "")
+                                           + f"\nСегодня пар: {n}")
             # 🏆 итоги сезона — в первый день месяца после 10:00
             prev = (now.date().replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
             if now.day == 1 and now.hour >= 10 and game.get_setting("season_sent") != prev:
@@ -1038,6 +1159,7 @@ COMMANDS = [
     BotCommand(command="shop", description="Магазин"),
     BotCommand(command="promises", description="Обещания"),
     BotCommand(command="finance", description="Финансы"),
+    BotCommand(command="schedule", description="Расписание пар"),
     BotCommand(command="bank", description="Банк заданий"),
     BotCommand(command="web", description="Войти в веб-приложение"),
     BotCommand(command="help", description="Помощь"),

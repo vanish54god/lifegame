@@ -257,6 +257,7 @@ async function renderToday() {
     isToday ? api("GET", "/promises") : null, isToday ? api("GET", "/plan/day/" + day) : null,
     isToday ? api("GET", "/habits") : null, api("GET", "/rating/" + day),
     isToday ? api("GET", "/fin/envelopes").catch(() => null) : null]);
+  const sched = isToday ? await api("GET", "/schedule/now").catch(() => null) : null;
   state.meta.today = d.today;
   const qs = d.quests.filter(q => q.category !== "habit" && q.category !== "money");
   const canPlay = day <= d.today;
@@ -274,6 +275,7 @@ async function renderToday() {
         <button class="btn btn-icon" data-act="pday" data-n="1" aria-label="Следующий день" ${day > d.today ? "disabled" : ""}>›</button>
       </div>
     </div>`;
+  html += schedTodayHtml(sched);
   if (plan) html += startByHtml(plan.start_by);
   if (money && money.on) {
     const left = money.left_today;
@@ -395,7 +397,8 @@ async function renderAdmin() {
   if (!state.adminDay || state.adminDay < t) state.adminDay = addDays(t, 1);
   if (state.adminTab === "bank") { await loadHud(); return renderBank(); }
   const day = state.adminDay;
-  const [d, tpls, pl] = await Promise.all([api("GET", "/day/" + day), api("GET", "/templates"), api("GET", "/plan/day/" + day), loadHud()]);
+  const [d, tpls, pl, sch] = await Promise.all([api("GET", "/day/" + day), api("GET", "/templates"), api("GET", "/plan/day/" + day),
+    api("GET", "/schedule/day/" + day).catch(() => null), loadHud()]);
   const qs = d.quests.filter(q => q.category !== "habit");
   const mains = qs.filter(q => q.is_main).length;
   const f = state.form;
@@ -416,7 +419,7 @@ async function renderAdmin() {
       <span>Основных <b style="color:${mains ? "var(--ink)" : "var(--bad)"}">${mains}/${state.meta.max_main}</b></span>
       <span class="muted">·</span><span>${qs.length} ${plural(qs.length, "квест", "квеста", "квестов")}</span>
       <span class="muted">·</span><span><b>${fmt(qs.reduce((s, q) => s + q.xp, 0))}</b> XP</span>
-    </div>${loadHtml(pl.load)}
+    </div>${schedDayHtml(sch)}${loadHtml(pl.load)}
     <button class="btn btn-sm" data-act="adminTab" data-t="bank" style="margin-bottom:10px">🗃 Взять из банка</button>
     ${qs.length ? qs.map(q => questCard(q, "admin")).join("") : `<div class="empty">Пусто. Добавь 1–3 основных квеста и бонусы.</div>`}
 
@@ -784,7 +787,8 @@ actions.setTheme = el => {
 // ================= Экран: Настройки =================
 
 async function renderSettings() {
-  const [st, , habitsBlock] = await Promise.all([api("GET", "/settings"), loadHud(), habitsSettingsHtml()]);
+  const [st, , habitsBlock, sch] = await Promise.all([api("GET", "/settings"), loadHud(), habitsSettingsHtml(),
+    api("GET", "/schedule/settings")]);
   const m = state.meta;
   view.innerHTML = `<div class="h1">Настройки</div>
 
@@ -792,11 +796,13 @@ async function renderSettings() {
     <div class="card">${themePicker()}
       <p class="muted small" style="margin-bottom:0">«Авто»: днём, пока ты игрок, — светлый Vice City, с 20:00 до 6:00, в режиме админа, — ночной город. Тема запоминается на этом устройстве.</p></div>
 
+    ${schedSettingsHtml(sch, st.capacity_pair_h)}
+
     <div class="h2">⏰ Время</div>
     <form class="card" data-submit="saveSettings">
       <div class="row">
         <label class="field" style="flex:1"><span>Отбой</span><input class="input" type="time" name="bedtime" value="${esc(st.bedtime)}"></label>
-        <label class="field" style="flex:1"><span>Часов на дела в день</span><input class="input" type="number" name="capacity" min="1" max="16" step="0.5" value="${st.capacity_h}"></label>
+        <label class="field" style="flex:1"><span>Часов на дела в свободный день</span><input class="input" type="number" name="capacity" min="1" max="16" step="0.5" value="${st.capacity_h}"></label>
       </div>
       <p class="muted small" style="margin-top:0">По отбою считается «начни не позже», по часам на дела — перегруз дня в админке.</p>
       <label class="row small" style="margin-bottom:12px"><input type="checkbox" name="startby" ${st.remind_startby ? "checked" : ""}> напомнить в боте, когда пора садиться</label>
@@ -852,7 +858,7 @@ actions.saveSettings = async form => {
   const body = {
     remind_morning: cur.remind_morning, remind_evening: cur.remind_evening, remind_promises: cur.remind_promises,
     checkin_on: cur.checkin_on, checkin_every: cur.checkin_every, checkin_from: cur.checkin_from, checkin_to: cur.checkin_to,
-    bedtime: cur.bedtime, capacity_h: cur.capacity_h, remind_startby: cur.remind_startby,
+    bedtime: cur.bedtime, capacity_h: cur.capacity_h, capacity_pair_h: cur.capacity_pair_h, remind_startby: cur.remind_startby,
   };
   const f = form.elements;
   if (f.morning) Object.assign(body, {

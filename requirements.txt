@@ -4,3 +4,5 @@ fastapi>=0.110
 uvicorn[standard]>=0.29
 pyzipper>=0.3.6
 tzdata  # часовые пояса на Windows
+icalendar>=6.0
+recurring-ical-events>=3.3
