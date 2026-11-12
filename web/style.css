@@ -458,3 +458,47 @@ html[data-theme="vice"] body::before { content: ""; position: fixed; top: 0; lef
 .pair-mark { font-size: 12px; color: var(--accent); font-weight: 700; margin-top: 2px; }
 .mark-pick { margin: 4px 0 8px 98px; }
 .mark-pick .chip { font-size: 12px; padding: 5px 9px; }
+
+/* 🎬 сюжет */
+.story-strip { display: flex; align-items: center; gap: 12px; padding: 12px 14px; margin-bottom: 10px; border-radius: 10px; cursor: pointer;
+  background: linear-gradient(100deg, var(--tint-accent), transparent 70%), var(--surface); border: 1px solid var(--line); border-left: 4px solid var(--accent); }
+.story-ico { font-size: 26px; }
+.story-body { flex: 1; min-width: 0; }
+.story-label { font: 700 10px var(--cond); letter-spacing: .12em; text-transform: uppercase; color: var(--accent); }
+.story-title { font: 700 17px/1.2 var(--cond); text-transform: uppercase; letter-spacing: .02em; }
+.story-xp { font: 800 16px var(--cond); color: var(--money); white-space: nowrap; }
+.story-chapter { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 6px 0 8px; padding: 14px; border-radius: 10px;
+  border: 1px solid var(--season-border); background: linear-gradient(160deg, var(--tint-accent), transparent 60%), var(--surface); }
+.story-chapter-title { font: 800 20px var(--cond); text-transform: uppercase; letter-spacing: .02em; }
+.mission.paused { opacity: .7; }
+.step { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-top: 1px solid var(--line); font-size: 14px; }
+.step-title { flex: 1; }
+.step.done .step-title { color: var(--muted); text-decoration: line-through; }
+.step-check { width: 26px; height: 26px; border-radius: 7px; border: 2px solid var(--line); background: var(--surface-2); color: var(--accent-ink); font-weight: 900; cursor: pointer; flex: none; }
+.step.done .step-check { background: var(--good); border-color: var(--good); }
+.chronicle-chapter { margin: 14px 0; }
+.chronicle-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding-bottom: 6px; border-bottom: 2px solid var(--accent); font: 800 16px var(--cond); text-transform: uppercase; }
+.chronicle-head .small { font-family: var(--body); text-transform: none; font-weight: 400; }
+.chronicle-item { display: grid; grid-template-columns: 52px 1fr; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.chronicle-date { font: 700 13px var(--cond); color: var(--ink-2); }
+.chronicle-outro { font-style: italic; margin: 2px 0; }
+
+.cutscene { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; background: rgba(5,6,8,0); cursor: pointer; }
+.cutscene.play { animation: cut-bg 9s ease forwards; }
+.cut-bar { position: absolute; left: 0; right: 0; height: 0; background: #000; }
+.cut-bar.top { top: 0; } .cut-bar.bottom { bottom: 0; }
+.cutscene.play .cut-bar { animation: cut-bars .9s cubic-bezier(.2,.8,.2,1) forwards; }
+.cut-center { text-align: center; padding: 24px; max-width: 560px; opacity: 0; }
+.cutscene.play .cut-center { animation: cut-in .9s .7s ease forwards; }
+.cut-chapter { font: 700 12px var(--cond); letter-spacing: .3em; text-transform: uppercase; color: #a9a49a; margin-bottom: 14px; }
+.cut-passed { font: 900 clamp(34px, 9vw, 64px)/1 var(--cond); font-stretch: condensed; text-transform: uppercase; letter-spacing: .03em;
+  color: #f0a53a; text-shadow: 3px 3px 0 #000, 0 0 40px rgba(240,165,58,.35); }
+html[data-theme="vice"] .cut-passed { color: #f28cb4; text-shadow: 3px 3px 0 #000, 0 0 40px rgba(242,140,180,.4); }
+.cut-title { font: 800 22px/1.2 var(--cond); text-transform: uppercase; color: #f4efe6; margin-top: 14px; letter-spacing: .04em; }
+.cut-outro { font: italic 17px/1.4 Georgia, serif; color: #d9d3c7; margin-top: 18px; min-height: 1em; }
+.cut-reward { font: 800 18px var(--cond); color: #8fd18a; margin-top: 20px; letter-spacing: .06em; }
+.cut-hint { font-size: 11px; color: #6f6b64; margin-top: 30px; letter-spacing: .1em; opacity: 0; }
+.cutscene.play .cut-hint { animation: cut-in .6s 2s ease forwards; }
+@keyframes cut-bg { 0% { background: rgba(5,6,8,0) } 8%, 100% { background: rgba(5,6,8,.97) } }
+@keyframes cut-bars { to { height: 12vh; } }
+@keyframes cut-in { from { opacity: 0; transform: translateY(8px) } to { opacity: 1; transform: none } }

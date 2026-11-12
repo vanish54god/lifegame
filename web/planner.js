@@ -177,7 +177,8 @@ function adminTabs() {
   const tab = state.adminTab || "plan";
   return `<div class="h1">Режим админа</div><div class="chips" style="margin:10px 0 6px">
     <button class="chip ${tab === "plan" ? "on" : ""}" data-act="adminTab" data-t="plan">📋 План дня</button>
-    <button class="chip ${tab === "bank" ? "on" : ""}" data-act="adminTab" data-t="bank">🗃 Банк заданий</button></div>`;
+    <button class="chip ${tab === "bank" ? "on" : ""}" data-act="adminTab" data-t="bank">🗃 Банк</button>
+    <button class="chip ${tab === "story" ? "on" : ""}" data-act="adminTab" data-t="story">🎬 Сюжет</button></div>`;
 }
 actions.adminTab = el => { state.adminTab = el.dataset.t; return renderAdmin(); };
 actions.bOpen = el => { const id = Number(el.dataset.id); state.bankOpen = state.bankOpen === id ? null : id; return renderBank(); };
@@ -236,7 +237,7 @@ actions.bankSub = async form => {
 
 function statsTabs() {
   const tab = state.statsTab || "main";
-  return `<div class="chips" style="margin:10px 0 4px">${[["main", "Обзор"], ["week", "Неделя"], ["cal", "Календарь"], ["season", "Сезоны"]].map(([k, l]) =>
+  return `<div class="chips" style="margin:10px 0 4px">${[["main", "Обзор"], ["week", "Неделя"], ["cal", "Календарь"], ["season", "Сезоны"], ["story", "🎬 Хроника"]].map(([k, l]) =>
     `<button class="chip ${tab === k ? "on" : ""}" data-act="statsTab" data-t="${k}">${l}</button>`).join("")}</div>`;
 }
 actions.statsTab = el => { state.statsTab = el.dataset.t; return renderStats(); };

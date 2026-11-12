@@ -30,6 +30,8 @@ CATEGORIES: dict[str, Category] = {
     "habit": Category("habit", "Привычка", "🔁", 10, 50, False, pickable=False),
     # день, прожитый в лимите трат
     "money": Category("money", "Деньги", "💰", 10, 50, False, pickable=False),
+    # этапы и финалы сюжетных миссий
+    "story": Category("story", "Сюжет", "🎬", 100, 5000, False, pickable=False),
 }
 
 # Слова, которыми можно назвать категорию в команде боту

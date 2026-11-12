@@ -257,8 +257,8 @@ async function renderToday() {
     isToday ? api("GET", "/promises") : null, isToday ? api("GET", "/plan/day/" + day) : null,
     isToday ? api("GET", "/habits") : null, api("GET", "/rating/" + day),
     isToday ? api("GET", "/fin/envelopes").catch(() => null) : null]);
-  const [sched, marks] = isToday ? await Promise.all([api("GET", "/schedule/now").catch(() => null),
-    api("GET", "/schedule/marks").catch(() => null)]) : [null, null];
+  const [sched, marks, story] = isToday ? await Promise.all([api("GET", "/schedule/now").catch(() => null),
+    api("GET", "/schedule/marks").catch(() => null), api("GET", "/story").catch(() => null)]) : [null, null, null];
   state.meta.today = d.today;
   const qs = d.quests.filter(q => q.category !== "habit" && q.category !== "money");
   const canPlay = day <= d.today;
@@ -276,7 +276,7 @@ async function renderToday() {
         <button class="btn btn-icon" data-act="pday" data-n="1" aria-label="Следующий день" ${day > d.today ? "disabled" : ""}>›</button>
       </div>
     </div>`;
-  html += schedTodayHtml(sched) + studyHtml(marks);
+  html += storyStripHtml(story) + schedTodayHtml(sched) + studyHtml(marks);
   if (plan) html += startByHtml(plan.start_by);
   if (money && money.on) {
     const left = money.left_today;
@@ -397,6 +397,7 @@ async function renderAdmin() {
   const t = state.meta.today;
   if (!state.adminDay || state.adminDay < t) state.adminDay = addDays(t, 1);
   if (state.adminTab === "bank") { await loadHud(); return renderBank(); }
+  if (state.adminTab === "story") { await loadHud(); return renderStory(); }
   const day = state.adminDay;
   const [d, tpls, pl, sch] = await Promise.all([api("GET", "/day/" + day), api("GET", "/templates"), api("GET", "/plan/day/" + day),
     api("GET", "/schedule/day/" + day).catch(() => null), loadHud()]);

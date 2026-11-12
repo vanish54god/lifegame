@@ -25,6 +25,7 @@ from .game import SHOP_KINDS, Game, GameError, game_day
 from .promise_text import parse_promise
 from .bot_finance import K_FIN, K_MONEY, FinUI, days_word, register_finance
 from .bot_planner import K_BANK, PlanUI, register_planner, time_rows
+from .bot_story import register_story, strip_line
 from .life import month_bounds
 from .backup import make_backup
 from aiogram.types import FSInputFile
@@ -160,6 +161,10 @@ class UI:
         quests = [q for q in self.game.quests(day) if q.category.key not in ("habit", "money")]
         planning = day > t
         lines = [header or self.day_title(day)]
+        if day == t:
+            sl = strip_line(self.game)
+            if sl:
+                lines.append(sl)
         if self.show("show_sched") and day >= t:
             lines += self.sched_lines(day)
         if day == t:
@@ -434,6 +439,7 @@ def build_router(cfg: Config, game: Game, auth: Auth) -> Router:
             [Btn(text="🛠 Админ", callback_data="more:admin"), Btn(text="👤 Профиль", callback_data="more:me")],
             [Btn(text="💌 Обещания", callback_data="p:list"), Btn(text="🔁 Привычки", callback_data="hb:list")],
             [Btn(text="🛒 Магазин", callback_data="shop:list"), Btn(text="⭐ Оценить день", callback_data="rt:ask:0")],
+            [Btn(text="🎬 Сюжет", callback_data="st:home"), Btn(text="📚 Расписание", callback_data="sch:home")],
             [Btn(text="🌐 Приложение", callback_data="adm:web"), Btn(text="⚙ Что показывать", callback_data="more:show")],
         )
 
@@ -1128,6 +1134,7 @@ def build_router(cfg: Config, game: Game, auth: Auth) -> Router:
 
     register_finance(router, ui, edit, celebrate, MAIN_KB)
     register_planner(router, ui, edit, celebrate)
+    register_story(router, ui, edit, celebrate)
 
     # Любой другой текст вне диалогов — подсказка
     @router.message(StateFilter(None), F.text)
@@ -1294,6 +1301,7 @@ COMMANDS = [
     BotCommand(command="promises", description="Обещания"),
     BotCommand(command="finance", description="Финансы"),
     BotCommand(command="schedule", description="Расписание пар"),
+    BotCommand(command="story", description="Сюжетные миссии"),
     BotCommand(command="bank", description="Банк заданий"),
     BotCommand(command="web", description="Войти в веб-приложение"),
     BotCommand(command="help", description="Помощь"),

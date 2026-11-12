@@ -162,5 +162,7 @@ def connect(path: str | Path) -> sqlite3.Connection:
     conn.executescript(SCHED_SCHEMA)
     from .study import SCHEMA as STUDY_SCHEMA    # контрольные, лабы, экзамены на парах
     conn.executescript(STUDY_SCHEMA)
+    from .story import SCHEMA as STORY_SCHEMA    # сюжетные миссии и главы
+    conn.executescript(STORY_SCHEMA)
     _migrate(conn)
     return conn

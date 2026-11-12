@@ -136,6 +136,8 @@ ACHIEVEMENTS = [
     ("envelope1", "💌", "По конвертам", "Впервые разложи деньги по конвертам", False),
     ("saver10k", "🏦", "Подушка", "10 000 ₽ в накоплениях", False),
     ("fund_ontime", "🎁", "Всё по плану", "Фонд набрался к своему сроку", False),
+    ("story1", "🎬", "Миссия пройдена", "Прошёл первую сюжетную миссию", False),
+    ("chapter1", "📖", "Конец главы", "Закрыл главу, в которой были пройденные миссии", False),
     ("study1", "✍️", "Боевое крещение", "Написал первую отмеченную контрольную, тест или лабу", False),
     ("excellent", "🏅", "Отличник", "Три пятёрки за отмеченные работы", False),
     ("exam1", "💀", "Босс семестра", "Сдал первый экзамен", False),
@@ -170,6 +172,7 @@ ACHIEVEMENTS = [
     ("payday", "💰", "Зарплатный день", "Получил оплату сразу за 5 смен", True),
     ("longhaul", "🦥", "Долгострой", "Закрыл задачу, которая пролежала в банке 30+ дней", True),
     ("deep", "🧘", "Глубокое погружение", "3 часа на таймере за один квест", True),
+    ("exhale", "😮‍💨", "Выдох", "Прошёл сюжетную миссию из трёх и больше этапов", True),
     ("double", "🛡", "С запасом", "На каждый повторяющийся платёж отложено на два раза вперёд", True),
 ]
 
@@ -189,6 +192,8 @@ class Game:
         self.schedule = Schedule(self)
         from .study import Study
         self.study = Study(self)
+        from .story import Story
+        self.story = Story(self)
         # для умных чек-инов (в памяти; после перезапуска считаем, что ты только что был активен)
         self.last_activity = time.time()
         self.last_checkin = 0.0
@@ -258,7 +263,7 @@ class Game:
         q = self.get(quest_id)
         if q.status == "done":
             raise GameError("Выполненный квест удалить нельзя — сначала отмени выполнение")
-        if q.category.key in ("habit", "promise", "money"):
+        if q.category.key in ("habit", "promise", "money", "story"):
             raise GameError("Этот квест управляется своим разделом")
         self.conn.execute("DELETE FROM quests WHERE id = ?", (quest_id,))
         self.conn.commit()
@@ -665,6 +670,7 @@ class Game:
         fc = self.fin.counts()
         ec = self.env.counts(today)
         sc = self.study.counts()
+        stc = self.story.counts()
         bc = self.planner.counts()
         pc = self.planner.pace_counts()
         hd, hw = self.life.best_habit_streaks(today)
@@ -735,6 +741,8 @@ class Game:
             "inlimit7": max(self.fin.limit_streak(today), self.env.limit_streak(today)) >= 7,
             "dream": fc["wishes_done"] >= 1,
             "envelope1": ec["allocations"] >= 1, "saver10k": ec["saved_total"] >= 1_000_000,
+            "story1": stc["story_done"] >= 1, "chapter1": stc["chapters_closed"] >= 1,
+            "exhale": stc["story_big"] >= 1,
             "study1": sc["marks_done"] >= 1, "excellent": sc["grades5"] >= 3, "exam1": sc["exams_done"] >= 1,
             "fund_ontime": ec["funds_ontime"] >= 1, "allgreen": ec["allgreen"], "double": ec["double"],
             "payday": fc["max_payout_shifts"] >= 5,
