@@ -148,3 +148,92 @@ def test_api_schedule(game):
     assert "now" in c.get("/api/schedule/now").json()
     st = c.get("/api/settings").json()
     assert st["capacity_pair_h"] == 3
+
+
+# ---------- ⚡ важные пары ----------
+
+REAL = ev("kr@x", "711 Кратные ряды (лекция)", "20260901T083000", "20260901T100000", rrule="FREQ=WEEKLY;BYDAY=MO")
+LAB = ev("lab@x", "2254 Современные процессоры (лр)", "20260901T120000", "20260901T133000", rrule="FREQ=WEEKLY;BYDAY=MO")
+
+
+def test_title_parsing(game):
+    from app.study import parse_title
+    assert parse_title("711 Кратные ряды (лекция)") == {"subject": "Кратные ряды", "room": "711", "ptype": "лекция"}
+    assert parse_title("2254 Современные процессоры (лр)")["ptype"] == "лаба"
+    assert parse_title("Физкультура") == {"subject": "Физкультура", "room": "", "ptype": ""}
+    game.schedule.apply(ics(REAL, LAB), T)
+    p = game.schedule.pairs(T)
+    assert p[0]["location"] == "ауд. 711" and p[0]["subject"] == "Кратные ряды"
+    assert p[1]["suggest"] == "lab" and p[0]["suggest"] == "kr"
+
+
+def test_mark_creates_quest_and_prep_5_days_before(game):
+    st, s = game.study, game.schedule
+    s.apply(ics(REAL, LAB), T)
+    far = s.pairs(T + timedelta(days=14))[0]                      # КР через 2 недели
+    m = st.mark(far["key"], "kr", T)
+    assert m["xp"] == 300 and m["task_id"] is None                 # подготовка ещё не в банке
+    q = game.get(m["quest_id"])
+    assert q.day == "2026-11-30" and q.xp == 300 and "Кратные ряды" in q.title
+    assert st.tick(T + timedelta(days=8)) == []                    # за 6 дней — ещё рано
+    made = st.tick(T + timedelta(days=9))                          # за 5 дней — в банк
+    assert len(made) == 1
+    t = game.planner.task(made[0]["task"]["id"], T + timedelta(days=9))
+    assert t["deadline"] == "2026-11-30" and t["est_min"] == 180
+    assert s.day(T + timedelta(days=14))[0]["mark"]["kind"] == "kr"
+    st.mark(far["key"], "test", T)                                 # передумал — тест вместо КР
+    assert len([x for x in st.upcoming(T) if x["key"] == far["key"]]) == 1
+    assert game.conn.execute("SELECT COUNT(*) FROM bank_tasks").fetchone()[0] == 0   # старая подготовка убрана
+
+
+def test_mark_follows_moved_pair(game):
+    st, s = game.study, game.schedule
+    s.apply(ics(REAL), T)
+    p = s.pairs(T + timedelta(days=7))[0]
+    m = st.mark(p["key"], "kr", T)
+    st.tick(T + timedelta(days=2))
+    moved = ev("kr@x", "711 Кратные ряды (лекция)", "20261124T140000", "20261124T153000", rid="20261123T083000")
+    r = s.apply(ics(REAL, moved), T + timedelta(days=2))
+    assert r["moved"] and r["moved"][0]["mark"] == "kr"
+    m2 = st.get(m["id"])
+    assert m2["day"] == "2026-11-24" and m2["start"] == "14:00"
+    assert game.get(m["quest_id"]).day == "2026-11-24"
+    assert game.planner.task(m2["task_id"], T)["deadline"] == "2026-11-24"
+    assert all(e["status"] == "ok" for e in s.day(T + timedelta(days=7)))   # на старом месте не «отменили»
+
+
+def test_grade_bonus_after_week(game):
+    st, s = game.study, game.schedule
+    s.apply(ics(REAL), T)
+    m = st.mark(s.pairs(T)[0]["key"], "kr", T)
+    game.set_status(m["quest_id"], "done") if hasattr(game, "set_status") else None
+    game.mark(m["quest_id"], "done") if game.get(m["quest_id"]).status != "done" else None
+    assert st.grades_pending(T + timedelta(days=6)) == []
+    assert [x["id"] for x in st.grades_pending(T + timedelta(days=7))] == [m["id"]]
+    st.set_grade(m["id"], "later", T + timedelta(days=7))
+    assert st.grades_pending(T + timedelta(days=8)) == []
+    r = st.set_grade(m["id"], "5", T + timedelta(days=10))
+    assert r["bonus_xp"] == 150
+    assert "study1" in game._achieved(T + timedelta(days=10))
+    with pytest.raises(Exception):
+        st.set_grade(m["id"], "4", T + timedelta(days=10))
+
+
+def test_api_marks(game):
+    from fastapi.testclient import TestClient
+    from app.auth import Auth
+    from app.config import Config
+    from app.web import create_app
+    a = Auth(game.conn)
+    c = TestClient(create_app(Config("1:x", 42, ":memory:", 5, MSK), game, a))
+    c.headers["Authorization"] = "Bearer " + c.post("/api/login", json={"code": a.new_code()}).json()["token"]
+    game.schedule.apply(ics(REAL, LAB), date.today())
+    nxt = next(p for i in range(8) for p in game.schedule.pairs(date.today() + timedelta(days=i + 1)))
+    m = c.post("/api/schedule/mark", json={"key": nxt["key"], "kind": "lab"}).json()
+    assert m["xp"] == 200
+    assert c.post("/api/schedule/mark", json={"key": "nope", "kind": "lab"}).status_code == 400
+    j = c.get("/api/schedule/marks").json()
+    assert j["upcoming"][0]["id"] == m["id"] and j["kinds"]["exam"]["xp"] == 800
+    d = c.get(f"/api/schedule/day/{nxt['day']}").json()
+    assert any(p["mark"] for p in d["pairs"])
+    assert c.delete(f"/api/schedule/mark/{m['id']}").json()["ok"]

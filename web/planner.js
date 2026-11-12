@@ -379,10 +379,54 @@ actions.habitDel = async el => {
 };
 
 // ---------- 📚 Расписание пар ----------
-function pairRow(p) {
+const STUDY_KINDS = { test: ["Тест", "📝", 160], lab: ["Лабораторная", "🧪", 200], kr: ["Контрольная", "✍️", 300],
+                      zachet: ["Зачёт", "🎓", 500], exam: ["Экзамен", "💀", 800] };
+function pairName(p) {
+  return `${esc(p.subject || p.title)}${p.ptype ? ` <span class="pair-type">${esc(p.ptype)}</span>` : ""}`;
+}
+function pairRow(p, editable) {
   const off = p.status === "cancelled";
-  return `<div class="pair ${off ? "off" : ""}"><span class="pair-time">${p.allday ? "весь день" : `${p.start}–${p.end}`}</span>
-    <span class="pair-title">${off ? "🎉 " : ""}${esc(p.title)}${p.location ? ` <span class="muted">· ${esc(p.location)}</span>` : ""}</span></div>`;
+  const m = p.mark;
+  const canMark = editable && !off && !p.allday && p.day >= state.meta.today;
+  const picking = state.markPick === p.key;
+  return `<div class="pair ${off ? "off" : ""} ${m ? "marked" : ""}"><span class="pair-time">${p.allday ? "весь день" : `${p.start}–${p.end}`}</span>
+    <span class="pair-title">${off ? "🎉 " : ""}${pairName(p)}${p.location ? ` <span class="muted">· ${esc(p.location)}</span>` : ""}
+      ${m ? `<div class="pair-mark">${m.emoji} ${esc(m.kind_title)} · ${m.xp} XP${m.grade ? ` · оценка ${esc(m.grade === "pass" ? "зачёт" : m.grade)}` : ""}</div>` : ""}</span>
+    ${canMark ? (m ? `<button class="btn btn-sm btn-ghost" data-act="markDel" data-id="${m.id}" aria-label="Снять отметку">✕</button>`
+                   : `<button class="btn btn-sm btn-ghost" data-act="markPick" data-key="${esc(p.key)}" aria-label="Отметить важное">⚡</button>`) : ""}</div>
+    ${picking ? `<div class="chips mark-pick">${[p.suggest, ...Object.keys(STUDY_KINDS).filter(k => k !== p.suggest)].map(k =>
+      `<button class="chip" data-act="markSet" data-key="${esc(p.key)}" data-k="${k}">${STUDY_KINDS[k][1]} ${STUDY_KINDS[k][0]} · ${STUDY_KINDS[k][2]}</button>`).join("")}</div>` : ""}`;
+}
+actions.markPick = el => { state.markPick = state.markPick === el.dataset.key ? null : el.dataset.key; return refresh(); };
+actions.markSet = async el => {
+  const m = await api("POST", "/schedule/mark", { key: el.dataset.key, kind: el.dataset.k });
+  state.markPick = null;
+  toast(`⚡ ${m.kind_title}: +${m.xp} XP в этот день · за 5 дней — подготовка в банк`);
+  await refresh();
+};
+actions.markDel = async el => {
+  if (!confirm("Снять отметку? Квест и подготовка (если ещё не начата) удалятся.")) return;
+  await api("DELETE", "/schedule/mark/" + el.dataset.id);
+  await refresh();
+};
+actions.grade = async el => {
+  const r = await api("POST", `/schedule/mark/${el.dataset.id}/grade`, { grade: el.dataset.g });
+  toast(el.dataset.g === "later" ? "⏳ Спрошу через пару дней" : r.bonus_xp ? `🏅 +${r.bonus_xp} XP бонусом` : "🏅 Записал");
+  celebrate(r);
+  await refresh();
+};
+function studyHtml(mk) {
+  if (!mk) return "";
+  let html = "";
+  for (const m of mk.grades) {
+    html += `<div class="card sched-card"><div class="small">🏅 Оценку уже знаешь? ${m.emoji} ${esc(m.kind_title)}: <b>${esc(m.subject)}</b> · ${ddmm(m.day)}</div>
+      <div class="muted small">«5» — +50% XP, «4» и «зачёт» — +25%</div>
+      <div class="chips" style="margin-top:8px">${[["5", "5"], ["4", "4"], ["3", "3"], ["pass", "✅ зачёт"], ["fail", "❌ не сдал"], ["later", "⏳ не знаю"]].map(([g, t]) =>
+        `<button class="chip" data-act="grade" data-id="${m.id}" data-g="${g}">${t}</button>`).join("")}</div></div>`;
+  }
+  const soon = mk.upcoming.filter(m => m.days_left <= 7);
+  if (soon.length) html += `<div class="banner hot small">${soon.map(m => `⚡ ${m.days_left === 0 ? "<b>Сегодня</b>" : m.days_left === 1 ? "<b>Завтра</b>" : `Через ${m.days_left} дн`}: ${m.emoji} ${esc(m.kind_title.toLowerCase())} — ${esc(m.subject)} в ${m.start}`).join("<br>")}</div>`;
+  return html;
 }
 function schedTodayHtml(s) {
   if (!s || !s.connected) return "";
@@ -390,18 +434,18 @@ function schedTodayHtml(s) {
   const allday = s.pairs.filter(p => p.allday && p.status === "ok").map(p => `<div class="small muted">🗓 ${esc(p.title)}</div>`).join("");
   let head;
   if (s.now) {
-    head = `<div class="pair-now"><span class="pair-tag">Сейчас</span> <b>${esc(s.now.title)}</b>${s.now.location ? ` · ${esc(s.now.location)}` : ""}
+    head = `<div class="pair-now"><span class="pair-tag">Сейчас</span> <b>${pairName(s.now)}</b>${s.now.location ? ` · ${esc(s.now.location)}` : ""}
       <div class="small muted">до ${s.now.end} · ещё ${fmtMin(s.now_left_min)}</div></div>`;
   } else if (s.next && s.next.day === s.day) {
-    head = `<div class="pair-now"><span class="pair-tag next">Дальше</span> <b>${esc(s.next.title)}</b> в ${s.next.start}${s.next.location ? ` · ${esc(s.next.location)}` : ""}
+    head = `<div class="pair-now"><span class="pair-tag next">Дальше</span> <b>${pairName(s.next)}</b> в ${s.next.start}${s.next.location ? ` · ${esc(s.next.location)}` : ""}
       <div class="small muted">через ${fmtMin(s.next_in_min)}${s.leave_at && s.next_in_min > 60 ? ` · выходить в ${s.leave_at}` : ""}</div></div>`;
   } else if (pairs.length) {
     head = `<div class="small muted">📚 Пары на сегодня закончились ✌️</div>`;
   } else {
-    head = `<div class="small muted">📚 Сегодня пар нет${s.next ? ` · ближайшая ${WD_SHORT[parseDay(s.next.day).getDay()]} ${s.next.start} — ${esc(s.next.title)}` : ""}</div>`;
+    head = `<div class="small muted">📚 Сегодня пар нет${s.next ? ` · ближайшая ${WD_SHORT[parseDay(s.next.day).getDay()]} ${s.next.start} — ${esc(s.next.subject || s.next.title)}` : ""}</div>`;
   }
-  const after = s.now && s.next && s.next.day === s.day ? `<div class="small" style="margin-top:6px">⏭ Дальше: ${esc(s.next.title)} в ${s.next.start}${s.next.location ? ` · ${esc(s.next.location)}` : ""}</div>` : "";
-  const list = pairs.length ? `<details class="pairs-more"><summary class="small muted">Все пары сегодня · ${pairs.filter(p => p.status === "ok").length}</summary>${pairs.map(pairRow).join("")}</details>` : "";
+  const after = s.now && s.next && s.next.day === s.day ? `<div class="small" style="margin-top:6px">⏭ Дальше: ${pairName(s.next)} в ${s.next.start}${s.next.location ? ` · ${esc(s.next.location)}` : ""}</div>` : "";
+  const list = pairs.length ? `<details class="pairs-more"><summary class="small muted">Все пары сегодня · ${pairs.filter(p => p.status === "ok").length}</summary>${pairs.map(p => pairRow(p, true)).join("")}</details>` : "";
   return `<div class="card sched-card">${allday}${head}${after}${list}</div>`;
 }
 function schedDayHtml(s) {
@@ -411,7 +455,8 @@ function schedDayHtml(s) {
   return `<div class="card sched-card">
     <div class="row small"><b>📚 ${pairs.length ? `Пары ${b.first}–${b.last}` : "Пар нет"}</b><span class="spacer"></span>
       ${s.leave_at ? `<span class="muted">🚇 выходить в ${s.leave_at}</span>` : ""}</div>
-    ${s.pairs.map(pairRow).join("")}</div>`;
+    ${s.pairs.map(p => pairRow(p, true)).join("")}
+    <div class="muted small" style="margin-top:6px">⚡ — отметить контрольную, тест, лабу, зачёт или экзамен</div></div>`;
 }
 function schedSettingsHtml(st, cap) {
   return `<div class="h2">📚 Расписание пар</div>
@@ -439,15 +484,15 @@ actions.schedSave = async form => {
   const cur = await api("GET", "/settings");
   await api("PUT", "/settings", { ...cur, capacity_pair_h: Number(f.cap_pair.value) || 0, show: undefined, show_titles: undefined, sessions: undefined, day_start_hour: undefined });
   toast(r.last_error ? `⚠️ ${r.last_error}` : body.url ? `📚 Подключено · пар: ${r.count}` : "Сохранено");
-  await render();
+  await refresh();
 };
 actions.schedSync = async () => {
   const r = await api("POST", "/schedule/sync");
   toast(`🔄 Обновлено · пар впереди: ${r.count}${r.cancelled ? ` · отменили ${r.cancelled}` : ""}`);
-  await render();
+  await refresh();
 };
 actions.schedOff = async () => {
   if (!confirm("Отключить расписание? Пары пропадут из игры (в Apple Календаре всё останется).")) return;
   await api("PUT", "/schedule/settings", { url: "" });
-  await render();
+  await refresh();
 };

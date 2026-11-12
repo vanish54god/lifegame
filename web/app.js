@@ -257,7 +257,8 @@ async function renderToday() {
     isToday ? api("GET", "/promises") : null, isToday ? api("GET", "/plan/day/" + day) : null,
     isToday ? api("GET", "/habits") : null, api("GET", "/rating/" + day),
     isToday ? api("GET", "/fin/envelopes").catch(() => null) : null]);
-  const sched = isToday ? await api("GET", "/schedule/now").catch(() => null) : null;
+  const [sched, marks] = isToday ? await Promise.all([api("GET", "/schedule/now").catch(() => null),
+    api("GET", "/schedule/marks").catch(() => null)]) : [null, null];
   state.meta.today = d.today;
   const qs = d.quests.filter(q => q.category !== "habit" && q.category !== "money");
   const canPlay = day <= d.today;
@@ -275,7 +276,7 @@ async function renderToday() {
         <button class="btn btn-icon" data-act="pday" data-n="1" aria-label="Следующий день" ${day > d.today ? "disabled" : ""}>›</button>
       </div>
     </div>`;
-  html += schedTodayHtml(sched);
+  html += schedTodayHtml(sched) + studyHtml(marks);
   if (plan) html += startByHtml(plan.start_by);
   if (money && money.on) {
     const left = money.left_today;

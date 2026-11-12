@@ -6,6 +6,15 @@ from fastapi import Depends, FastAPI
 from pydantic import BaseModel, Field
 
 
+class MarkIn(BaseModel):
+    key: str = Field(max_length=500)
+    kind: str
+
+
+class GradeIn(BaseModel):
+    grade: str
+
+
 class SchedSettingsIn(BaseModel):
     url: str | None = Field(None, max_length=2000)
     commute_min: int | None = Field(None, ge=0, le=600)
@@ -47,6 +56,34 @@ def add_schedule_routes(app: FastAPI, game, today, now, require_auth) -> None:
     @app.get("/api/schedule/day/{day}", dependencies=auth)
     async def sched_day(day: date):
         return day_info(day)
+
+    # ---------- ⚡ важные пары ----------
+
+    def with_ach(fn):
+        before = game._achieved(today())
+        r = fn()
+        new = [a for a in game.full_stats(today())["achievements"] if a["done"] and a["key"] not in before]
+        return {**r, "new_achievements": new}
+
+    @app.get("/api/schedule/marks", dependencies=auth)
+    async def marks():
+        from app.study import KINDS, GRADES
+        return {"upcoming": game.study.upcoming(today()), "grades": game.study.grades_pending(today()),
+                "kinds": {k: {"title": v[0], "emoji": v[1], "xp": v[2], "prep_min": v[3]} for k, v in KINDS.items()},
+                "grade_titles": {k: v[0] for k, v in GRADES.items()}}
+
+    @app.post("/api/schedule/mark", dependencies=auth)
+    async def mark(body: MarkIn):
+        return game.study.mark(body.key, body.kind, today())
+
+    @app.delete("/api/schedule/mark/{mid}", dependencies=auth)
+    async def unmark(mid: int):
+        game.study.unmark(mid, today())
+        return {"ok": True}
+
+    @app.post("/api/schedule/mark/{mid}/grade", dependencies=auth)
+    async def grade(mid: int, body: GradeIn):
+        return with_ach(lambda: game.study.set_grade(mid, body.grade, today()))
 
     @app.get("/api/schedule/week", dependencies=auth)
     async def sched_week():

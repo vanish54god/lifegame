@@ -222,10 +222,12 @@ class Schedule:
                  e["note"], stamp))
         soon = (today + timedelta(days=NOTICE_DAYS)).isoformat()
         gone = []
+        new_keys = {e["key"] for e in events}
+        marked = {r["key"] for r in self.conn.execute("SELECT key FROM sched_marks WHERE status='active'")}
         for k, r in old.items():
-            if r["status"] != "ok" or k in {e["key"] for e in events}:
+            if r["status"] != "ok" or k in new_keys:
                 continue
-            if today.isoformat() <= r["day"] <= soon and not r["allday"]:
+            if (today.isoformat() <= r["day"] <= soon or k in marked) and not r["allday"]:
                 self.conn.execute("UPDATE sched_events SET status='cancelled' WHERE key=?", (k,))
                 gone.append(r)
             elif r["day"] >= today.isoformat():
@@ -234,19 +236,24 @@ class Schedule:
                           ((today - timedelta(days=KEEP_DAYS)).isoformat(),))
         # перенос: та же пара (uid) пропала и появилась в другое время в ближайшие дни
         moved, cancelled = [], []
-        new_soon = [e for e in added if today.isoformat() <= e["day"] <= soon and not e["allday"]]
+        new_soon = [e for e in added if today.isoformat() <= e["day"] and not e["allday"]]
         for r in gone:
             twin = next((e for e in new_soon if e["uid"] == r["uid"] or
                          (e["title"] == r["title"] and abs((date.fromisoformat(e["day"]) -
                                                             date.fromisoformat(r["day"])).days) <= 7)), None)
+            mark = self.conn.execute("SELECT kind FROM sched_marks WHERE key=? AND status='active'",
+                                     (r["key"],)).fetchone()
             if twin:
                 new_soon.remove(twin)
-                moved.append({"old": r, "new": twin})
+                self.g.study.moved(r["key"], twin)
+                self.conn.execute("DELETE FROM sched_events WHERE key=?", (r["key"],))
+                moved.append({"old": r, "new": twin, "mark": mark["kind"] if mark else None})
             else:
-                cancelled.append(r)
+                cancelled.append({**r, "mark": mark["kind"] if mark else None})
         self.g.set_setting("sched_last_sync", stamp)
         self.g.set_setting("sched_last_error", "")
         self.conn.commit()
+        new_soon = [e for e in new_soon if e["day"] <= soon]
         return {"count": len(events), "cancelled": cancelled, "moved": moved, "added": new_soon}
 
     async def sync(self, today: date) -> dict:
@@ -271,10 +278,18 @@ class Schedule:
     # ---------- чтение ----------
 
     def day(self, d: date, with_cancelled: bool = True) -> list[dict]:
+        from .study import parse_title, suggest_kind
         q = "SELECT * FROM sched_events WHERE day = ?" + ("" if with_cancelled else " AND status='ok'")
         rows = [dict(r) for r in self.conn.execute(q + " ORDER BY allday DESC, start", (d.isoformat(),))]
+        marks = {r["key"]: r["id"] for r in self.conn.execute(
+            "SELECT id, key FROM sched_marks WHERE status='active' AND day = ?", (d.isoformat(),))}
         for r in rows:
             r["minutes"] = 0 if r["allday"] else max(0, _mins(r["end"]) - _mins(r["start"]))
+            r.update(parse_title(r["title"]))
+            if not r["location"] and r["room"]:
+                r["location"] = f"ауд. {r['room']}"
+            r["suggest"] = suggest_kind(r["ptype"])
+            r["mark"] = self.g.study.get(marks[r["key"]]) if r["key"] in marks else None
         return rows
 
     def pairs(self, d: date) -> list[dict]:

@@ -25,6 +25,7 @@ from .planner import PlanError
 from .life import LifeError
 from .envelopes import EnvError
 from .schedule import SchedError
+from .study import StudyError
 from .web_schedule import add_schedule_routes
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
@@ -117,6 +118,7 @@ def create_app(cfg: Config, game: Game, auth: Auth) -> FastAPI:
     @app.exception_handler(PlanError)
     @app.exception_handler(LifeError)
     @app.exception_handler(SchedError)
+    @app.exception_handler(StudyError)
     @app.exception_handler(EnvError)
     async def fin_error(_: Request, e: Exception):
         return JSONResponse({"detail": str(e)}, status_code=400)

@@ -451,3 +451,10 @@ html[data-theme="vice"] body::before { content: ""; position: fixed; top: 0; lef
 .pair.off .pair-title { text-decoration: line-through; color: var(--muted); }
 .pairs-more { margin-top: 8px; }
 .pairs-more summary { cursor: pointer; list-style: none; }
+.pair { align-items: center; }
+.pair-title { flex: 1; min-width: 0; }
+.pair-type { font: 700 10px var(--cond); letter-spacing: .06em; text-transform: uppercase; color: var(--ink-2); background: var(--surface-2); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; vertical-align: 1px; }
+.pair.marked .pair-time { color: var(--accent); }
+.pair-mark { font-size: 12px; color: var(--accent); font-weight: 700; margin-top: 2px; }
+.mark-pick { margin: 4px 0 8px 98px; }
+.mark-pick .chip { font-size: 12px; padding: 5px 9px; }

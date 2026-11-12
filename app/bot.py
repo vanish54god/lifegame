@@ -23,7 +23,7 @@ from .auth import Auth
 from .config import Config
 from .game import SHOP_KINDS, Game, GameError, game_day
 from .promise_text import parse_promise
-from .bot_finance import K_FIN, K_MONEY, FinUI, register_finance
+from .bot_finance import K_FIN, K_MONEY, FinUI, days_word, register_finance
 from .bot_planner import K_BANK, PlanUI, register_planner, time_rows
 from .life import month_bounds
 from .backup import make_backup
@@ -134,21 +134,24 @@ class UI:
             nn = sch.now_next(now)
             if nn["now"]:
                 p = nn["now"]
-                out.append(f"📚 <b>Сейчас:</b> {escape(p['title'])}" + (f", {escape(p['location'])}" if p["location"] else "")
+                out.append(f"📚 <b>Сейчас:</b> {pair_name(p)}" + (f", {escape(p['location'])}" if p["location"] else "")
                            + f" · до {p['end']}")
             nx = nn["next"]
             if nx and nx["day"] == day.isoformat():
-                out.append(f"⏭ Дальше: {escape(nx['title'])} в {nx['start']}" + (f", {escape(nx['location'])}" if nx["location"] else ""))
+                out.append(f"⏭ Дальше: {pair_name(nx)} в {nx['start']}" + (f", {escape(nx['location'])}" if nx["location"] else ""))
             if not nn["now"] and not (nx and nx["day"] == day.isoformat()):
                 out.append("📚 Пары на сегодня закончились ✌️")
         else:
             la = sch.leave_at(day)
             out.append(f"📚 Пары {pairs[0]['start']}–{pairs[-1]['end']}: "
-                       + ", ".join(escape(short(p["title"], 22)) for p in pairs if p["status"] == "ok")
+                       + ", ".join(pair_name(p, 22) for p in pairs if p["status"] == "ok")
                        + (f" · выходить в {la[0]}" if la else ""))
         for p in pairs:
             if p["status"] == "cancelled":
-                out.append(f"🎉 Отменили: {escape(p['title'])} {p['start']}")
+                out.append(f"🎉 Отменили: {pair_name(p)} {p['start']}")
+            elif p.get("mark") and day == self.today():
+                m = p["mark"]
+                out.append(f"⚡ <b>Сегодня {escape(m['kind_title'].lower())}</b>: {escape(m['subject'])} в {p['start']}")
         return out
 
     def render_day(self, day: date, header: str | None = None) -> tuple[str, InlineKeyboardMarkup | None]:
@@ -580,7 +583,112 @@ def build_router(cfg: Config, game: Game, auth: Auth) -> Router:
                 week.append(f"{ddmm_wd(d.isoformat())}: {ps[0]['start']}–{ps[-1]['end']} · {len(ps)} пар")
         if week:
             text += "\n\n" + "\n".join(week)
-        return text, kb([Btn(text="🔄 Обновить сейчас", callback_data="sch:sync")])
+        days = [ui.today() + timedelta(days=i) for i in range(7)]
+        days = [d for d in days if game.schedule.pairs(d)]
+        btns = [Btn(text=ddmm_wd(d.isoformat()), callback_data=f"sch:day:{d.isoformat()}") for d in days]
+        up = game.study.upcoming(ui.today())
+        if up:
+            text += "\n\n⚡ <b>Важное впереди</b>\n" + "\n".join(
+                f"{m['emoji']} {escape(m['kind_title'])}: {escape(m['subject'])} — {ddmm_wd(m['day'])} {m['start']}"
+                f" ({days_word(m['days_left'])})" for m in up[:8])
+        text += "\n\n<i>Отметить контрольную, тест или лабу: выбери день 👇</i>"
+        return text, kb(btns[:4], btns[4:], [Btn(text="🔄 Обновить сейчас", callback_data="sch:sync")])
+
+    def sched_day(d: date) -> tuple[str, InlineKeyboardMarkup]:
+        from app.study import KINDS
+        ps = [p for p in game.schedule.day(d) if not p["allday"]]
+        lines = [f"📚 <b>{ddmm_wd(d.isoformat())}</b>", ""]
+        rows = []
+        for i, p in enumerate(ps):
+            mark = p.get("mark")
+            line = f"{p['start']}–{p['end']} {pair_name(p)}" + (f" · {escape(p['location'])}" if p["location"] else "")
+            if p["status"] == "cancelled":
+                line = f"<s>{line}</s> 🎉"
+            elif mark:
+                line += f"\n   ⚡ <b>{escape(mark['kind_title'])}</b> · {mark['xp']} XP"
+            lines.append(line)
+            if p["status"] != "ok" or d < ui.today():
+                continue
+            if mark:
+                rows.append([Btn(text=f"✖️ Снять: {short(mark['kind_title'] + ' — ' + p['subject'], 26)}",
+                                 callback_data=f"sch:um:{mark['id']}:{d.isoformat()}")])
+            else:
+                rows.append([Btn(text=f"⚡ {short(p['subject'], 26)}", callback_data=f"sch:pk:{d.isoformat()}:{i}")])
+        if not ps:
+            lines.append("Пар нет")
+        rows.append([Btn(text="⬅️ Расписание", callback_data="sch:home")])
+        return "\n".join(lines), kb(*rows)
+
+    @router.callback_query(F.data == "sch:home")
+    async def sch_home(cb: CallbackQuery):
+        text, markup = sched_status()
+        await cb.answer()
+        await cb.message.edit_text(text, reply_markup=markup)
+
+    @router.callback_query(F.data.startswith("sch:day:"))
+    async def sch_day_cb(cb: CallbackQuery):
+        text, markup = sched_day(date.fromisoformat(cb.data.split(":")[2]))
+        await cb.answer()
+        await cb.message.edit_text(text, reply_markup=markup)
+
+    @router.callback_query(F.data.startswith("sch:pk:"))
+    async def sch_pick(cb: CallbackQuery):
+        from app.study import KINDS
+        _, _, iso, idx = cb.data.split(":")
+        ps = [p for p in game.schedule.day(date.fromisoformat(iso)) if not p["allday"]]
+        p = ps[int(idx)]
+        order = [p["suggest"]] + [k for k in KINDS if k != p["suggest"]]
+        rows = [[Btn(text=f"{KINDS[k][1]} {KINDS[k][0]} · {KINDS[k][2]} XP", callback_data=f"sch:mk:{iso}:{idx}:{k}")]
+                for k in order]
+        rows.append([Btn(text="⬅️ Назад", callback_data=f"sch:day:{iso}")])
+        await cb.answer()
+        await cb.message.edit_text(f"⚡ Что будет на паре?\n<b>{pair_name(p)}</b> — {ddmm_wd(iso)} {p['start']}\n\n"
+                                   f"<i>Квест в этот день + за 5 дней задача «подготовиться» в банк</i>",
+                                   reply_markup=kb(*rows))
+
+    @router.callback_query(F.data.startswith("sch:mk:"))
+    async def sch_mark(cb: CallbackQuery):
+        _, _, iso, idx, kind = cb.data.split(":")
+        ps = [p for p in game.schedule.day(date.fromisoformat(iso)) if not p["allday"]]
+        try:
+            m = game.study.mark(ps[int(idx)]["key"], kind, ui.today())
+        except Exception as e:
+            return await cb.answer(f"⛔ {e}"[:190], show_alert=True)
+        await cb.answer(f"⚡ {m['kind_title']}: +{m['xp']} XP в этот день")
+        text, markup = sched_day(date.fromisoformat(iso))
+        await cb.message.edit_text(text, reply_markup=markup)
+
+    @router.callback_query(F.data.startswith("sch:um:"))
+    async def sch_unmark(cb: CallbackQuery):
+        _, _, mid, iso = cb.data.split(":")
+        try:
+            game.study.unmark(int(mid), ui.today())
+        except Exception as e:
+            return await cb.answer(f"⛔ {e}"[:190], show_alert=True)
+        await cb.answer("Снято")
+        text, markup = sched_day(date.fromisoformat(iso))
+        await cb.message.edit_text(text, reply_markup=markup)
+
+    @router.callback_query(F.data.startswith("gr:"))
+    async def grade_cb(cb: CallbackQuery):
+        _, mid, g = cb.data.split(":")
+        before = game._achieved(ui.today())
+        try:
+            m = game.study.set_grade(int(mid), g, ui.today())
+        except Exception as e:
+            return await cb.answer(f"⛔ {e}"[:190], show_alert=True)
+        if g == "later":
+            await cb.answer("Спрошу через пару дней")
+            return await cb.message.edit_text(f"⏳ Ок, спрошу про «{escape(m['subject'])}» через пару дней")
+        await cb.answer()
+        await cb.message.edit_text(f"🏅 {escape(m['kind_title'])}: <b>{escape(m['subject'])}</b> — оценка записана"
+                                   + (f"\n+{m['bonus_xp']} XP бонусом 🔥" if m["bonus_xp"] else ""))
+        new = [a for a in game.full_stats(ui.today())["achievements"] if a["done"] and a["key"] not in before]
+        if new:
+            await celebrate(cb.message, {"level_before": 0, "level_after": 0, "new_achievements": new})
+        nxt = game.study.grades_pending(ui.today())
+        if nxt:
+            await cb.message.answer(*grade_ask(nxt[0]))
 
     @router.message(Command("schedule"))
     async def cmd_schedule(msg: Message, command: CommandObject):
@@ -1050,6 +1158,20 @@ def c_min(e: dict) -> int:
     return max(0, h2 * 60 + m2 - h1 * 60 - m1)
 
 
+def pair_name(p: dict, n: int = 40) -> str:
+    """Предмет без номера аудитории + тип пары: «Кратные ряды (лекция)»."""
+    t = escape(short(p.get("subject") or p["title"], n))
+    return t + (f" <i>({escape(p['ptype'])})</i>" if p.get("ptype") else "")
+
+
+def grade_ask(m: dict) -> tuple[str, InlineKeyboardMarkup]:
+    text = (f"🏅 Оценку уже знаешь?\n{m['emoji']} {escape(m['kind_title'])}: <b>{escape(m['subject'])}</b> ({ddmm_wd(m['day'])})\n"
+            f"<i>«5» — +50% XP, «4» и «зачёт» — +25%</i>")
+    g = lambda t, k: Btn(text=t, callback_data=f"gr:{m['id']}:{k}")
+    return text, kb([g("5", "5"), g("4", "4"), g("3", "3")], [g("✅ Зачёт", "pass"), g("❌ Не сдал", "fail")],
+                    [g("⏳ Ещё не знаю", "later")])
+
+
 async def reminders_loop(bot: Bot, cfg: Config, game: Game) -> None:
     """Раз в 20 секунд проверяет, не пора ли напомнить. Время задаётся в веб-приложении."""
     ui = UI(cfg, game)
@@ -1113,6 +1235,18 @@ async def reminders_loop(bot: Bot, cfg: Config, game: Game) -> None:
                         await bot.send_message(cfg.owner_id, "📚 <b>Расписание поменялось</b>\n\n" + "\n".join(msg))
                 except Exception as e:
                     print("Расписание:", e)
+            # ⚡ за 5 дней до контрольной — подготовка в банк
+            for m in game.study.tick(ui.today()):
+                await bot.send_message(cfg.owner_id, f"📖 <b>В банк:</b> подготовиться — {escape(m['kind_title'].lower())} "
+                                       f"«{escape(m['subject'])}» {ddmm_wd(m['day'])} {m['start']}\n"
+                                       f"~{rules.fmt_min(m['prep_min'])} · дедлайн — сама пара. Начнёт «гореть» ближе к дате 🔥")
+            # 🏅 оценки — раз в день после 18:00
+            if now.hour >= 18 and game.get_setting("sent_grades") != today_str:
+                pend = game.study.grades_pending(ui.today())
+                if pend:
+                    game.set_setting("sent_grades", today_str)
+                    m = pend[0]
+                    await bot.send_message(cfg.owner_id, *grade_ask(m))
             # 🚇 пора выходить — один раз в день
             if game.get_setting("sched_leave", "1") == "1" and game.get_setting("sent_leave") != today_str:
                 la = game.schedule.leave_at(now.date())
