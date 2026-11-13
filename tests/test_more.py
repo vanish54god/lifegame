@@ -159,11 +159,15 @@ def test_api_game_flow(client):
     r = client.patch(f"/api/quests/{qid}", json={"status": "done"})
     assert r.json()["level_after"] == 2
     assert client.get(f"/api/day/{d}").json()["stats"]["xp_on_day"] == 300
-    # лимит основных
-    for i in range(2):
-        client.post("/api/quests", json={"day": d, "category": "work", "title": f"w{i}", "xp": 100})
-    r = client.post("/api/quests", json={"day": d, "category": "sleep", "title": "s", "xp": 50})
+    # лимит основных — только для будущих дней, в сегодня без лимита
+    tm = (client.today + timedelta(days=1)).isoformat()
+    for i in range(3):
+        client.post("/api/quests", json={"day": tm, "category": "work", "title": f"w{i}", "xp": 100})
+    r = client.post("/api/quests", json={"day": tm, "category": "sleep", "title": "s", "xp": 50})
     assert r.status_code == 400 and "основных" in r.json()["detail"]
+    for i in range(3):
+        r = client.post("/api/quests", json={"day": d, "category": "work", "title": f"t{i}", "xp": 100})
+        assert r.status_code == 200
     # магазин
     it = client.post("/api/shop/items", json={"title": "Кофе", "cost": 20, "kind": "fun", "repeatable": True}).json()
     r = client.post(f"/api/shop/items/{it['id']}/buy")

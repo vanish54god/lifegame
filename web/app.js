@@ -431,7 +431,7 @@ async function renderAdmin() {
 
     <div class="h2">${esc(dayName(day))}, ${ddmm(day)}</div>
     <div class="row small" style="margin-bottom:10px">
-      <span>Основных <b style="color:${mains ? "var(--ink)" : "var(--bad)"}">${mains}/${state.meta.max_main}</b></span>
+      <span>Основных <b style="color:${mains ? "var(--ink)" : "var(--bad)"}">${mains}${day > state.meta.today ? `/${state.meta.max_main}` : ""}</b></span>
       <span class="muted">·</span><span>${qs.length} ${plural(qs.length, "квест", "квеста", "квестов")}</span>
       <span class="muted">·</span><span><b>${fmt(qs.reduce((s, q) => s + q.xp, 0))}</b> XP</span>
     </div>${schedDayHtml(sch)}${loadHtml(pl.load)}
@@ -856,7 +856,7 @@ async function renderSettings() {
     <div class="h2">Правила</div>
     <div class="card">
       ${m.categories.map(c => `<div class="row" style="padding:4px 0"><span>${c.emoji} ${esc(c.title)}${c.is_main ? "" : " (бонус)"}</span><span class="spacer"></span><b>${c.xp_min}–${c.xp_max} XP</b></div>`).join("")}
-      <p class="muted small" style="margin-bottom:0">Основных — до ${m.max_main} в день. Уровень: ${m.level_base} XP на первый, дальше +${m.level_step}. Монеты = XP / ${m.coins_per_xp}.
+      <p class="muted small" style="margin-bottom:0">Основных — до ${m.max_main} при планировании, а в сегодня можно добавлять сколько успеешь. Уровень: ${m.level_base} XP на первый, дальше +${m.level_step}. Монеты = XP / ${m.coins_per_xp}.
       Новый игровой день начинается в ${st.day_start_hour}:00. Серия идёт, если все основные квесты дня выполнены.</p>
     </div>
 

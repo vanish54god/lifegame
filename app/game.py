@@ -224,8 +224,12 @@ class Game:
 
     # ================= Квесты =================
 
+    def today(self) -> date:
+        return game_day(datetime.now(self.tz), getattr(self, "day_start_hour", 5))
+
     def _check_main_limit(self, day: date, category: rules.Category, ignore_id: int | None = None):
-        if not category.is_main:
+        """Лимит основных — только когда планируешь будущие дни. Сегодня — сколько успеешь: окно появилось, сделал."""
+        if not category.is_main or day <= self.today():
             return
         mains = sum(1 for q in self.quests(day) if q.is_main and q.id != ignore_id)
         if mains >= rules.MAX_MAIN_PER_DAY:

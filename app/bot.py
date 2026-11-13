@@ -269,7 +269,7 @@ class UI:
         pu = PlanUI(self)
         hot = [x for x in self.game.planner.schedulable(self.today()) if x["heat"] >= 2]
         text = (f"🛠 <b>Режим админа</b>\n\nНа завтра: {len(qs)} квест(ов), "
-                f"основных {mains}/{rules.MAX_MAIN_PER_DAY}, "
+                f"основных {mains}/{rules.MAX_MAIN_PER_DAY} (в сегодня — без лимита), "
                 f"{sum(q.xp for q in qs)} XP\n" + pu.load_line(self.game.planner.load(tomorrow)))
         if hot:
             text += "\n\n🔥 <b>Горит в банке:</b>\n" + "\n".join(
@@ -546,7 +546,7 @@ def build_router(cfg: Config, game: Game, auth: Auth) -> Router:
 
     @router.message(Command("rules"))
     async def cmd_rules(msg: Message):
-        lines = ["<b>📜 Правила</b>", "", f"<b>Основные</b> (1–{rules.MAX_MAIN_PER_DAY} в день):"]
+        lines = ["<b>📜 Правила</b>", "", f"<b>Основные</b> (1–{rules.MAX_MAIN_PER_DAY} при планировании, в сегодня — сколько успеешь):"]
         for c in rules.CATEGORIES.values():
             if c.is_main:
                 lines.append(f"{c.emoji} {c.title}: {c.xp_min}–{c.xp_max} XP")

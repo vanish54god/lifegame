@@ -1,6 +1,6 @@
 """Тесты: python -m pytest"""
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import pytest
 
@@ -45,13 +45,18 @@ def test_xp_bounds_are_soft(game):
     assert warn is None
 
 
-def test_max_three_main_but_bonus_unlimited(game):
+def test_max_three_main_when_planning_but_today_unlimited(game):
+    future = game.today() + timedelta(days=1)
     for i in range(3):
-        game.add_quest(DAY, rules.CATEGORIES["study"], f"Задание {i}", 100)
+        game.add_quest(future, rules.CATEGORIES["study"], f"Задание {i}", 100)
     with pytest.raises(GameError):
-        game.add_quest(DAY, rules.CATEGORIES["work"], "Смена", 200)
-    game.add_quest(DAY, rules.CATEGORIES["bonus"], "Разобрать стол", 30)
-    assert len(game.quests(DAY)) == 4
+        game.add_quest(future, rules.CATEGORIES["work"], "Смена", 200)
+    game.add_quest(future, rules.CATEGORIES["bonus"], "Разобрать стол", 30)
+    assert len(game.quests(future)) == 4
+    today = game.today()                                   # появилось окно — сколько успеешь
+    for i in range(5):
+        game.add_quest(today, rules.CATEGORIES["study"], f"Сегодня {i}", 100)
+    assert sum(q.is_main for q in game.quests(today)) == 5
 
 
 def test_complete_undo_and_level_up(game):
